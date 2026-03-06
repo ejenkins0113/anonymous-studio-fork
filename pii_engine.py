@@ -389,6 +389,41 @@ class PIIEngine:
                 merged.append(r)
         return merged
 
+    @staticmethod
+    def _build_rationale(r) -> str:
+        """Build a human-readable rationale string from a RecognizerResult."""
+        ex = getattr(r, "analysis_explanation", None)
+        if not ex:
+            return ""
+        parts = []
+        recognizer = getattr(ex, "recognizer", "") or ""
+        if recognizer:
+            parts.append(recognizer)
+        pattern_name = getattr(ex, "pattern_name", "") or ""
+        if pattern_name:
+            parts.append(f"pattern={pattern_name}")
+        original_score = getattr(ex, "original_score", None)
+        if original_score is not None and original_score != r.score:
+            parts.append(f"raw_score={original_score:.2f}")
+        textual = getattr(ex, "textual_explanation", "") or ""
+        if textual:
+            parts.append(textual)
+        return "; ".join(parts) if parts else ""
+
+    @staticmethod
+    def _entity_dict(r, text: str) -> Dict:
+        """Build entity dict from a RecognizerResult including rationale."""
+        ex = getattr(r, "analysis_explanation", None)
+        return {
+            "entity_type": r.entity_type,
+            "start": r.start,
+            "end": r.end,
+            "score": round(r.score, 3),
+            "text": text[r.start:r.end],
+            "recognizer": (getattr(ex, "recognizer", "") or "") if ex else "",
+            "rationale": PIIEngine._build_rationale(r),
+        }
+
     def analyze(self, text: str, entities: List[str] = None,
                 threshold: float = 0.35, allowlist: Optional[List[str]] = None,
                 denylist: Optional[List[str]] = None) -> List[Dict]:
@@ -406,11 +441,7 @@ class PIIEngine:
         deny = self._norm_terms(denylist)
         raw = self._apply_allowlist(raw, text, allow)
         raw = self._merge_results(raw, self._denylist_results(text, deny))
-        return [{"entity_type": r.entity_type, "start": r.start, "end": r.end,
-                 "score": round(r.score, 3), "text": text[r.start:r.end],
-                 "recognizer": (r.analysis_explanation.recognizer
-                                if r.analysis_explanation else "")}
-                for r in raw]
+        return [self._entity_dict(r, text) for r in raw]
 
     def anonymize(self, text: str, entities: List[str] = None,
                   operator: str = "replace", threshold: float = 0.35,
@@ -430,12 +461,7 @@ class PIIEngine:
         deny = self._norm_terms(denylist)
         raw_results = self._apply_allowlist(raw_results, text, allow)
         raw_results = self._merge_results(raw_results, self._denylist_results(text, deny))
-        detected = [{"entity_type": r.entity_type, "start": r.start,
-                     "end": r.end, "score": round(r.score, 3),
-                     "text": text[r.start:r.end],
-                     "recognizer": (r.analysis_explanation.recognizer
-                                    if r.analysis_explanation else "")}
-                    for r in raw_results]
+        detected = [self._entity_dict(r, text) for r in raw_results]
 
         ops = _get_ops(operator, tuple(sorted(entities or ALL_ENTITIES)))
 

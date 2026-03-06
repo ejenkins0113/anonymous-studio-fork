@@ -334,7 +334,7 @@ qt_highlight_md    = ""
 qt_anonymized      = ""
 qt_anonymized_raw  = ""          # raw text for session save (no markdown)
 qt_entity_rows     = pd.DataFrame(
-    columns=["Entity Type", "Text", "Confidence", "Confidence Band", "Span", "Recognizer"]
+    columns=["Entity Type", "Text", "Confidence", "Confidence Band", "Span", "Recognizer", "Rationale"]
 )
 qt_summary         = ""
 qt_confidence_md   = "Confidence profile: N/A"
@@ -350,7 +350,8 @@ qt_kpi_avg_confidence_ticker = "N/A"
 qt_kpi_low_confidence_ticker = "0"
 qt_last_proc_ms    = 0.0     # timing from last engine.anonymize() call
 qt_session_saved   = False
-qt_sessions_data   = pd.DataFrame(columns=["ID", "Title", "Operator", "Entities", "Created"])
+qt_selected_session = ""   # full session ID from table selection
+qt_sessions_data   = pd.DataFrame(columns=["ID", "Title", "Operator", "Entities", "Created", "full_id"])
 qt_entity_chart    = pd.DataFrame(columns=["Entity Type", "Count"])
 qt_entity_figure   = {}
 qt_entity_chart_visible = False
@@ -3037,11 +3038,12 @@ def _qt_rows_from_entities(entities: List[Dict[str, Any]]) -> pd.DataFrame:
                 "Confidence Band": _confidence_band(score_pct),
                 "Span": f"{ent.get('start', '?')}–{ent.get('end', '?')}",
                 "Recognizer": ent.get("recognizer", ""),
+                "Rationale": ent.get("rationale", ""),
             }
         )
     return pd.DataFrame(
         rows,
-        columns=["Entity Type", "Text", "Confidence", "Confidence Band", "Span", "Recognizer"],
+        columns=["Entity Type", "Text", "Confidence", "Confidence Band", "Span", "Recognizer", "Rationale"],
     )
 
 
@@ -3851,7 +3853,7 @@ def on_qt_clear(state):
     state.qt_anonymized_raw = ""
     state.qt_highlight_md = ""
     state.qt_entity_rows = pd.DataFrame(
-        columns=["Entity Type", "Text", "Confidence", "Confidence Band", "Span", "Recognizer"]
+        columns=["Entity Type", "Text", "Confidence", "Confidence Band", "Span", "Recognizer", "Rationale"]
     )
     state.qt_entity_chart = pd.DataFrame(columns=["Entity Type", "Count"])
     state.qt_entity_figure = {}
@@ -3881,10 +3883,11 @@ def _refresh_sessions(state):
             "Operator": s.operator,
             "Entities": sum(s.entity_counts.values()) if s.entity_counts else 0,
             "Created":  s.created_at[5:16].replace("T", " "),
+            "full_id":  s.id,
         }
         for s in sessions
     ]
-    state.qt_sessions_data = pd.DataFrame(rows, columns=["ID", "Title", "Operator", "Entities", "Created"])
+    state.qt_sessions_data = pd.DataFrame(rows, columns=["ID", "Title", "Operator", "Entities", "Created", "full_id"])
 
 
 def on_qt_save_session(state):
@@ -3912,6 +3915,45 @@ def on_qt_save_session(state):
     _refresh_sessions(state)
     _refresh_dashboard(state)
     notify(state, "success", f"Session saved (ID: {session.id[:8]})")
+
+
+def on_qt_load_session(state):
+    """Load a previously saved session back into the PII Text page.
+
+    Restored entities reflect the original detection configuration (threshold,
+    entity types, operator) at the time the session was saved — not the current
+    settings panel values.
+    """
+    sid = state.qt_selected_session
+    if not sid:
+        notify(state, "warning", "Select a session from the table first.")
+        return
+    session = store.get_session(sid)
+    if not session:
+        notify(state, "error", "Session not found.")
+        return
+    state.qt_input = session.original_text or ""
+    state.qt_anonymized_raw = session.anonymized_text or ""
+    state.qt_anonymized = _format_anon_md(session.anonymized_text) if session.anonymized_text else ""
+    state.qt_operator = session.operator or "replace"
+    ents = session.entities or []
+    state.qt_highlight_md = highlight_md(state.qt_input, ents)
+    _set_qt_entity_state(state, ents)
+    state.qt_session_saved = True
+    store.log_user_action("user", "session.load", "session", sid,
+                          f"Loaded session '{session.title}'")
+    _refresh_audit(state)
+    notify(state, "success", f"Session '{session.title}' loaded.")
+
+
+def on_qt_session_select(state, var_name, value):
+    """Handle row click on the saved sessions table — store full session ID."""
+    row = _get_table_row_from_action_payload(state.qt_sessions_data, value)
+    if not row:
+        return
+    sid = str(row.get("full_id", "") or "")
+    if sid:
+        state.qt_selected_session = sid
 
 
 def on_file_upload(state, action, payload):

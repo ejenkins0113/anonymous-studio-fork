@@ -662,13 +662,14 @@ NLP Engine: <|{spacy_status}|text|>
 
 <|part|class_name=panel entity-evidence-panel|
 <|3. Entity Evidence|text|class_name=sh sh-top|>
-<|{qt_entity_rows}|table|columns=Entity Type;Text;Confidence;Confidence Band;Span;Recognizer|show_all=False|page_size=8|filter=True|sortable=True|>
+<|{qt_entity_rows}|table|columns=Entity Type;Text;Confidence;Confidence Band;Span;Recognizer;Rationale|show_all=False|page_size=8|filter=True|sortable=True|>
 <|{qt_entity_chart}|chart|type=plotly|figure={qt_entity_figure}|height=300px|render={qt_entity_chart_visible}|>
 |>
 
 <|Saved Sessions|text|class_name=sh|>
 <|part|class_name=panel|
-<|{qt_sessions_data}|table|columns=ID;Title;Operator;Entities;Created|show_all=False|page_size=6|filter=True|sortable=True|>
+<|{qt_sessions_data}|table|columns=ID;Title;Operator;Entities;Created|show_all=False|page_size=6|filter=True|sortable=True|on_action=on_qt_session_select|>
+<|Load Session|button|on_action=on_qt_load_session|class_name=secondary|render={qt_selected_session!=""}|>
 |>
 
 <|{qt_settings_open}|dialog|title=Detection Settings|on_action=on_qt_settings_close|width=720px|
