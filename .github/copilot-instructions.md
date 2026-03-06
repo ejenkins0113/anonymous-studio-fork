@@ -5,28 +5,38 @@ This is **v2** — a full rewrite of the PoC ([cpsc4205-group3/anonymous-studio]
 ## Running the App
 
 ```bash
-python -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python -m spacy download en_core_web_lg   # optional but recommended
-python app.py
+taipy run main.py
 # → http://localhost:5000
 ```
 
-**Requires Python 3.10–3.13.** Python 3.14 is not supported (Presidio/spaCy have no wheels for it).
+**Requires Python 3.9–3.12.** Python 3.13+ is not supported (`taipy>=3.1.0,<4.2` has no wheels).
 
 ### Production mode
 ```bash
 export ANON_MODE=standalone
-export ANON_WORKERS=4
-python app.py
+export ANON_WORKERS=8
+export ANON_RAW_INPUT_BACKEND=mongo
+export ANON_MONGO_URI=mongodb://localhost:27017/anon_studio
+taipy run main.py
 ```
 
-### Linting
+### Linting & Testing
 ```bash
-flake8 . --max-line-length=120
+# CI runs syntax check only:
+find . -name '*.py' ! -path './.venv/*' -exec python -m py_compile {} +
+
+# Tests (pytest + fixtures in tests/):
+pytest tests/
+
+# Stress tests (large datasets):
+make stress
 ```
-Max line length is **120**. There are no automated tests in this repo yet — the PoC test suite (`test_streamlit.py`) does not apply here.
+
+Max line length is **120**. Tests live in `tests/` with 11 test files covering store, PII engine, attestation, auth, synthetic text, progress snapshots, and Taipy smoke tests.
 
 ---
 
@@ -45,15 +55,57 @@ PRs require 1 approving review and all status checks passing. Prefer *Squash and
 
 ## Architecture
 
-Five-file Python app. No web framework — all UI is **Taipy GUI** (Markdown DSL with reactive state).
+Modular Python app. No web framework — all UI is **Taipy GUI** (Markdown DSL with reactive state).
 
-| File | Role |
-|------|------|
-| `app.py` | All Taipy GUI pages, state variables, and callbacks (~1200 lines) |
+```
+anonymous_studio/
+├── main.py              Taipy CLI entrypoint (`taipy run main.py`)
+├── app.py               App state, callbacks, and runtime wiring
+├── rest_main.py         REST API entrypoint (Taipy Rest + optional Auth0 JWT)
+├── core_config.py       taipy.core: DataNodes, Task, Scenario, Orchestrator
+├── tasks.py             run_pii_anonymization() — the batch pipeline function
+├── pii_engine.py        Presidio Analyzer + Anonymizer wrapper; spaCy model resolution
+├── scheduler.py         Background appointment scheduler (daemon thread)
+├── pages/
+│   ├── __init__.py
+│   └── definitions.py   Taipy page markup strings (DASH, JOBS, PIPELINE, SCHEDULE, AUDIT, QT)
+├── store/
+│   ├── __init__.py      Factory (get_store) + public exports
+│   ├── base.py          Abstract StoreBase contract (all backends implement this)
+│   ├── models.py        PIISession, PipelineCard, Appointment, AuditEntry dataclasses
+│   ├── memory.py        MemoryStore (in-process dict-based, default)
+│   ├── mongo.py         MongoStore (persistent MongoDB backend)
+│   └── duckdb.py        DuckDBStore (optional alternative)
+├── services/
+│   ├── app_context.py   AppContext dataclass — shared mutable runtime registries
+│   ├── attestation_crypto.py  Ed25519 signing for compliance attestations
+│   ├── auth0_rest.py    Auth0 JWT validation middleware for REST endpoints
+│   ├── geo_signals.py   Geographic location normalization & city mapping
+│   ├── job_progress.py  Job progress registry (get/clear/persist)
+│   ├── jobs.py          Job lifecycle helpers (upload, staging, result parsing)
+│   ├── progress_snapshots.py  Durable JSON-based progress IPC (worker → GUI)
+│   ├── synthetic.py     Faker/LLM-based text synthesis for de-identification
+│   └── telemetry.py     Prometheus metrics exporter & Grafana integration
+├── ui/
+│   └── theme.py         Plotly chart theme/styling
+├── tests/               pytest test suite (11 test files)
+├── scripts/             Utility scripts (key generation, mongo check, stress)
+├── deploy/
+│   ├── auth-proxy/      oauth2-proxy + nginx reverse proxy starter
+│   └── grafana/         Prometheus + Grafana stack
+└── requirements.txt
+```
+
+| Core File | Role |
+|-----------|------|
+| `main.py` | Taipy CLI entrypoint — delegates to `app.run_app()` |
+| `app.py` | All Taipy GUI state variables, callbacks, and runtime wiring |
 | `core_config.py` | taipy.core DataNodes, Task, Scenario, Orchestrator bootstrap |
 | `tasks.py` | `run_pii_anonymization()` — the function the Orchestrator executes |
 | `pii_engine.py` | Presidio Analyzer + Anonymizer wrapper; spaCy model resolution |
-| `store.py` | In-memory store for Kanban cards, appointments, audit log |
+| `store/` | Multi-backend data store package (memory, MongoDB, DuckDB) |
+| `services/` | Extracted business logic (attestation, auth, geo, jobs, telemetry) |
+| `pages/` | Taipy Markdown DSL page definitions |
 
 ### Background job flow
 
@@ -90,7 +142,7 @@ The GUI polls `PROGRESS_REGISTRY` (in-process dict) when the user clicks "Refres
 All module-level variables in `app.py` are reactive state bound by name in the Markdown DSL (`<|{variable}|>`). Update state inside callbacks with `state.variable = value`. Never shadow a state variable with a local of the same name inside a callback. Use `notify(state, "success"|"warning"|"error"|"info", "message")` for toasts.
 
 ### File upload — bytes live outside state
-Taipy serializes state to JSON, so raw bytes can't be stored in a state variable. `on_file_upload` writes to the module-level `_FILE_CACHE = {"bytes": None, "name": ""}` dict. `state.job_file_content` holds only the filename string as a non-None flag.
+Taipy serializes state to JSON, so raw bytes can't be stored in a state variable. `on_file_upload` writes to the `AppContext.file_cache` dict (via `services/app_context.py`). `state.job_file_content` holds only the filename string as a non-None flag.
 
 ### `invoke_long_callback` signature
 ```python
@@ -106,13 +158,24 @@ invoke_long_callback(
 
 Status function signature: `(state, status_or_count, *user_status_function_args, function_result)` where `status_or_count` is `True` on success, `False` on exception, or an `int` period count. The background function's **return value** is `function_result`.
 
-### `store.py` public interface is a stable contract
-`app.py` calls only these methods — change internals freely, keep signatures stable:
-`add_card`, `update_card`, `delete_card`, `get_card`, `list_cards`, `cards_by_status`, `add_appointment`, `update_appointment`, `delete_appointment`, `list_appointments`, `upcoming_appointments`, `add_session`, `list_audit`, `log_user_action`, `stats`
+### `store/` public interface is a stable contract
+`store/` is a package with an abstract `StoreBase` class and multiple backends (memory, mongo, duckdb). `app.py` imports from the package:
+```python
+from store import get_store, describe_store_backend, get_store_backend_mode
+from store import PIISession, PipelineCard, Appointment, _now, _uid
+```
 
-**Known store.py bugs (as of Sprint 3-1):**
-- `app.py` calls `store.list_appts()` and `store.upcoming_appts()` in some refresh helpers — the correct names are `list_appointments()` / `upcoming_appointments()`. These fail silently because refresh helpers catch all exceptions.
-- `on_appt_edit` accesses `store._appointments` directly (internal) because `store.get_appointment(id)` does not exist as a public method. Add `get_appointment(id)` to the public interface when implementing the edit form.
+The `StoreBase` abstract class defines the full public API — change backend internals freely, keep these signatures stable:
+
+**Sessions:** `add_session`, `get_session`, `list_sessions`
+**Cards:** `add_card`, `update_card`, `delete_card`, `get_card`, `list_cards`, `cards_by_status`
+**Appointments:** `add_appointment`, `get_appointment`, `update_appointment`, `delete_appointment`, `list_appointments`, `upcoming_appointments`
+**Audit:** `list_audit`, `log_user_action`
+**Stats:** `stats`
+
+Backend selection via `ANON_STORE_BACKEND` env var: `memory` (default), `mongo`, `duckdb`, `auto`.
+
+**Known store bugs (as of Sprint 3-1):**
 - `update_appointment` and `delete_appointment` leave no audit trail.
 
 ### spaCy model resolution
@@ -122,7 +185,7 @@ Status function signature: `(state, status_or_count, *user_status_function_args,
 `core_config.py` registers all DataNodes/Tasks/Scenarios programmatically. `config.toml` exists only for the Taipy Studio VS Code extension — it is **not loaded at runtime** because Taipy 4.x doesn't auto-convert TOML scope strings to `Scope` enums.
 
 ### MongoDB swap
-`store.py` is structured for a drop-in MongoDB backend. Replace `DataStore` internals using the pattern from the PoC (`mongo_persistence.py` in `cpsc4205-group3/anonymous-studio`): read `MONGODB_URI` from env, use `python-dotenv`, cache the client with `@lru_cache`. The database name defaults to `anonymous_studio` via `MONGODB_DB_NAME` env var. Nothing in `app.py` changes — it only calls the public `store.*` methods.
+`store/` supports MongoDB natively via `store/mongo.py`. Set `ANON_STORE_BACKEND=mongo` and `MONGODB_URI` to switch. The UI also provides a runtime store-switching dialog (Settings → Store Settings). `MongoStore` sets `serverSelectionTimeoutMS=3000` for fast failure feedback. `pymongo[srv]>=4.7` is in `requirements.txt`.
 
 ### Security
 - **Never log raw user text** — it contains PII.
@@ -136,15 +199,17 @@ Status function signature: `(state, status_or_count, *user_status_function_args,
 - **`invoke_long_callback` in `on_submit_job()`** — replacing with a direct `tc.submit()` call will block the UI thread.
 - **`Scope.SCENARIO` on all DataNodes** — changing to `GLOBAL` makes concurrent jobs overwrite each other's data.
 - **`_find_spacy_model()` resolution order** — the blank fallback at the end is required for restricted/offline environments.
+- **Flat root layout** — `taipy run main.py` expects imports at root. Do not wrap in a `src/` directory.
+- **`StoreBase` abstract interface** — all backends must implement these methods. Change internals freely, keep signatures stable.
 
 ---
 
 ## Known Limitations
 
 - **Kanban is rendered as tables** — Taipy has no native Kanban widget. Cards are table rows; users move them with Forward/Back buttons. Intentional, not a bug.
-- **`PROGRESS_REGISTRY` is in-process** — in `standalone` mode (separate worker subprocesses), the dict is invisible to the GUI process. Real-time progress in production requires Redis or polling the `job_stats` DataNode.
-- **In-memory store resets on restart** — all pipeline cards, appointments, and audit entries are lost. See MongoDB swap above.
-- **No authentication** — suitable for course demo; needs a proxy or middleware before real deployment.
+- **`PROGRESS_REGISTRY` is in-process** — in `standalone` mode (separate worker subprocesses), the dict is invisible to the GUI process. Real-time progress in production requires `services/progress_snapshots.py` (durable JSON-based IPC) or polling the `job_stats` DataNode.
+- **In-memory store resets on restart** — all pipeline cards, appointments, and audit entries are lost. Switch to `ANON_STORE_BACKEND=mongo` or `duckdb` for persistence.
+- **No authentication in GUI** — suitable for course demo; use the `deploy/auth-proxy/` starter or a middleware proxy. REST API supports Auth0 JWT via `services/auth0_rest.py`.
 
 ---
 
@@ -497,15 +562,15 @@ Entities split into two families — important because the blank spaCy fallback 
 | Method | Entities | Requires NLP model |
 |--------|----------|--------------------|
 | Pattern match / regex / checksum | `EMAIL_ADDRESS`, `PHONE_NUMBER`, `CREDIT_CARD`, `US_SSN`, `US_PASSPORT`, `US_DRIVER_LICENSE`, `US_ITIN`, `US_BANK_NUMBER`, `IP_ADDRESS`, `URL`, `IBAN_CODE`, `DATE_TIME`, `MEDICAL_LICENSE` | ❌ No |
-| Custom logic + NLP context | `PERSON`, `LOCATION`, `NRP` | ✅ Yes — blank fallback skips these |
+| Custom logic + NLP context | `PERSON`, `LOCATION`, `NRP`, `ORGANIZATION` | ✅ Yes — blank fallback skips these |
 
-**Conclusion:** without `en_core_web_lg` installed, the 3 ML-dependent entities are silently skipped. The model status banner in the UI surfaces this.
+**Conclusion:** without `en_core_web_lg` installed, the 4 ML-dependent entities (`PERSON`, `LOCATION`, `NRP`, `ORGANIZATION`) are silently skipped. The model status banner in the UI surfaces this.
 
 ---
 
 ### Additional Entities Presidio Supports (not yet in the app)
 
-The app's 16 entities are a subset. Presidio also supports: `CRYPTO` (Bitcoin), `MAC_ADDRESS`, `UK_NHS`, `UK_NINO`, `ES_NIF`, `ES_NIE`, `IT_FISCAL_CODE`, `IN_AADHAAR`, `IN_PAN`, `AU_TFN`, and many more. To add them: append to `ALL_ENTITIES` in `pii_engine.py`.
+The app's 17 entities are a subset. Presidio also supports: `CRYPTO` (Bitcoin), `MAC_ADDRESS`, `UK_NHS`, `UK_NINO`, `ES_NIF`, `ES_NIE`, `IT_FISCAL_CODE`, `IN_AADHAAR`, `IN_PAN`, `AU_TFN`, and many more. To add them: append to `ALL_ENTITIES` in `pii_engine.py`.
 
 ---
 
@@ -583,53 +648,34 @@ The PoC has `azure_ai_language_wrapper.py` showing a `RemoteRecognizer` for call
 
 ---
 
-### Decision Process (Detection Rationale)
+### Decision Process (Detection Rationale — Done)
 
-When `return_decision_process=True`, each result's `.analysis_explanation` has:
-- `.recognizer` — name of the recognizer that fired
-- `.pattern_name` — regex pattern name (for PatternRecognizers)
-- `.pattern` — the actual regex
-- `.original_score` — raw score before context boosting
-- `.score` — final score after context enhancement
-- `.textual_explanation` — human-readable reason
+`pii_engine.py` passes `return_decision_process=True` to the Presidio analyzer. Each `RecognizerResult` then has an `.analysis_explanation` attribute. The entity evidence table in the UI shows 7 columns: Entity Type, Text, Confidence, Confidence Band, Span, Recognizer, Rationale.
 
-This is the data source for the **Detection Rationale** project board feature. Implement by passing this through `pii_engine.analyze()` return value and surfacing in the PII Text page entity table.
+The `fast=True` parameter in `analyze()` disables `return_decision_process` for performance in batch jobs.
 
 ---
 
 ## Testing Reference
 
-> Pattern from the PoC test suite (`cpsc4205-group3/anonymous-studio`) applied to v2.
+Tests live in `tests/` and use pytest. Run with `pytest tests/` or `make stress` for large-dataset tests.
 
----
+### Test files
 
-### Testing Taipy Callbacks Without Running the UI
+| Test file | What it covers |
+|-----------|---------------|
+| `test_store.py` | Store backends (sessions, cards, appointments, audit) |
+| `test_store_duckdb.py` | DuckDB-specific store backend |
+| `test_pii_engine.py` | PII detection/anonymization core |
+| `test_attestation_crypto.py` | Ed25519 signing/verification |
+| `test_auth0_rest.py` | Auth0 JWT validation |
+| `test_synthetic.py` | Synthetic text generation (Faker, LLMs) |
+| `test_progress_snapshots.py` | Job progress snapshot I/O |
+| `test_app_file_upload_download.py` | File upload/download workflows |
+| `test_taipy_mockstate_smoke.py` | Taipy GUI state/callback smoke tests |
+| `test_tasks_large.py` | Large batch job simulation |
 
-```python
-from taipy.gui.utils._mocked_gui import MockedGui
-from taipy.gui import State
-
-def test_on_card_save():
-    with MockedGui() as gui:
-        state = State(gui, vars={"card_title_f": "", "card_form_open": True})
-        on_card_save(state)
-        assert not state.card_form_open  # or notify was called with error
-```
-
-Alternatively, mock `store` and test the business logic directly without Taipy:
-
-```python
-from unittest.mock import patch, MagicMock
-
-def test_on_card_save_empty_title():
-    mock_state = MagicMock()
-    mock_state.card_title_f = ""
-    with patch("app.notify") as mock_notify:
-        on_card_save(mock_state)
-        mock_notify.assert_called_with(mock_state, "error", "Title is required.")
-```
-
-### Testing `store.py` (pure Python, no Taipy needed)
+### Testing `store/` (pure Python, no Taipy needed)
 
 ```python
 from store import get_store, PipelineCard
@@ -650,6 +696,21 @@ def test_email_detected():
     engine = get_engine()
     results = engine.analyze("Contact jane@example.com", entities=["EMAIL_ADDRESS"])
     assert any(r.entity_type == "EMAIL_ADDRESS" for r in results)
+```
+
+### Testing Taipy Callbacks
+
+Mock `store` and test business logic directly without running the UI:
+
+```python
+from unittest.mock import patch, MagicMock
+
+def test_on_card_save_empty_title():
+    mock_state = MagicMock()
+    mock_state.card_title_f = ""
+    with patch("app.notify") as mock_notify:
+        on_card_save(mock_state)
+        mock_notify.assert_called_with(mock_state, "error", "Title is required.")
 ```
 
 ---
@@ -697,16 +758,23 @@ def _bg_done(state, status, result):
 
 ---
 
-## Module-Level Caches (Thread Safety Note)
+## Runtime Context (`AppContext`)
 
-Two module-level dicts serve as cross-thread state (bypass Taipy's JSON serialization):
+`services/app_context.py` defines an `AppContext` dataclass that consolidates all mutable runtime registries into a single object (`APP_CTX` in `app.py`):
 
-| Dict | Key | Value | Purpose |
-|------|-----|-------|---------|
-| `_FILE_CACHE` | `"bytes"` / `"name"` | raw bytes, filename | Uploaded file bytes (bytes → str in JSON) |
-| `_SCENARIOS` | `job_id` (str) | `tc.Scenario` | Scenario reference for result loading |
+| Field | Type | Purpose |
+|-------|------|---------|
+| `scenarios` | `Dict[str, Any]` | Scenario reference for result loading (keyed by job_id) |
+| `submission_ids` | `Dict[str, str]` | Maps job_id → Taipy submission_id |
+| `file_cache` | `Dict[str, Dict]` | Uploaded file bytes per state_id (bytes can't live in Taipy state) |
+| `burndown_cache` | `Dict[str, Any]` | Dashboard burndown chart cache |
+| `live_state_ids` | `Set[str]` | Active browser connections (for live push) |
+| `live_state_lock` | `Lock` | Thread safety for live_state_ids |
+| `live_stop_event` | `Event` | Signal to stop background live-update thread |
+| `live_thread` | `Optional[Thread]` | Background live-push thread |
+| `event_processor` | `Any` | Taipy EventProcessor for job lifecycle events |
 
-Both are safe in single-process (`development`) mode. In `standalone` mode with multiple worker processes they would not be shared — use a database or shared filesystem instead.
+All fields are safe in single-process (`development`) mode. In `standalone` mode with multiple worker processes, the dict fields are not shared — use MongoDB or shared filesystem instead.
 
 
 ---
@@ -717,102 +785,58 @@ Both are safe in single-process (`development`) mode. In `standalone` mode with 
 
 | PoC Feature | v2 Status | Notes |
 |-------------|-----------|-------|
-| Text input + detect + anonymize | ✅ Done | PII Text page |
-| Entity type selector | ✅ Done | Static `ALL_ENTITIES` list |
+| Text input + detect + anonymize | ✅ Done | PII Text page (QT — Quick Test) |
+| Entity type selector | ✅ Done | 17 entities including ORGANIZATION |
 | Threshold slider | ✅ Done | Default 0.35 |
 | Operators: replace, redact, mask, hash | ✅ Done | |
 | Highlighted output | ✅ Done | `highlight_md()` — Taipy `mode=md` |
-| Entity findings table | ✅ Done | entity_type, text, confidence, span |
+| Entity findings table | ✅ Done | entity_type, text, confidence, span, recognizer, rationale |
 | CSV/Excel batch upload + background job | ✅ Done (v2 new) | |
 | Kanban pipeline | ✅ Done (v2 new) | |
 | Audit log | ✅ Done (v2 new) | |
+| **Allowlist** | ✅ Done | `allow_list=` param in `pii_engine.analyze()` |
+| **Denylist** | ✅ Done | `CUSTOM_DENYLIST` entity + regex cache |
+| **Detection rationale** | ✅ Done | `return_decision_process=True` → recognizer/rationale in entity table |
+| **ORGANIZATION entity** | ✅ Done | Added to `ALL_ENTITIES`; uses spaCy `ORG` → `ORGANIZATION` mapping |
 | **Operator: encrypt** | ⚠️ Partial | Listed in docs but `OperatorConfig("encrypt", {"key": key})` needs UI key field |
-| **Operator: synthesize** | ❌ Missing | Needs `OPENAI_KEY`; prompt template in PoC's `openai_fake_data_generator.py` |
-| **Allowlist** | ❌ Missing | Words that should NOT be flagged — pass as `allow_list=` to `analyzer.analyze()` |
-| **Denylist** | ❌ Missing | Words that SHOULD be flagged — `ad_hoc_recognizers=[PatternRecognizer(entity="GENERIC_PII", deny_list=...)]` |
-| **Detection rationale** | ❌ Missing (in progress) | `return_decision_process=True` → `.analysis_explanation` on each result |
-| **ORGANIZATION entity** | ❌ Missing | Not in `ALL_ENTITIES`; requires NLP model (`ORG` → `ORGANIZATION` mapping) |
-| Multiple NER models (HuggingFace, Stanza, Flair, Azure) | ❌ Out of scope | PoC has `presidio_nlp_engine_config.py` with full config for all; Azure wrapper in `azure_ai_language_wrapper.py` |
+| **Operator: synthesize** | ✅ Done | `services/synthetic.py` — Faker + LLM (OpenAI/Azure) backends |
+| **Compliance attestation** | ✅ Done (v2 new) | Ed25519 signatures via `services/attestation_crypto.py` |
+| **Telemetry** | ✅ Done (v2 new) | Prometheus metrics via `services/telemetry.py` |
+| **Auth0 JWT** | ✅ Done (v2 new) | REST API auth via `services/auth0_rest.py` |
+| **Appointment scheduler** | ✅ Done (v2 new) | Background daemon via `scheduler.py` |
+| Multiple NER models (HuggingFace, Stanza, Flair, Azure) | ❌ Out of scope | PoC has `presidio_nlp_engine_config.py` with full config for all |
 
 ---
 
-### Allowlist / Denylist Implementation Pattern
+### Allowlist / Denylist Implementation (Done)
 
-From `presidio_helpers.py` in the PoC:
+Both are implemented in `pii_engine.py`. The `analyze()` and `anonymize()` methods accept `allowlist` and `denylist` parameters:
 
 ```python
 # Allowlist — words that should NOT be flagged as PII
-results = analyzer.analyze(
-    text=text,
-    entities=entities,
-    language="en",
-    score_threshold=threshold,
-    allow_list=["John", "Smith"],   # these names are safe context in this doc
-)
+results = engine.analyze(text, entities=entities, allowlist=["John", "Smith"])
 
-# Denylist — words that MUST be flagged as GENERIC_PII
-from presidio_analyzer import PatternRecognizer
-
-deny_recognizer = PatternRecognizer(
-    supported_entity="GENERIC_PII",
-    deny_list=["Acme Corp", "Project X"],
-)
-results = analyzer.analyze(
-    text=text,
-    entities=entities + ["GENERIC_PII"],
-    language="en",
-    ad_hoc_recognizers=[deny_recognizer],
-)
+# Denylist — words that MUST be flagged as CUSTOM_DENYLIST
+results = engine.analyze(text, entities=entities, denylist=["Acme Corp", "Project X"])
 ```
 
-Add these as optional text-tag inputs on the PII Text page.
+Internally, denylist uses `CUSTOM_DENYLIST` entity type with a regex pattern cache (`_DENYLIST_PATTERN_CACHE`). Allowlist uses Presidio's native `allow_list=` parameter.
 
 ---
 
-### Synthesize Operator Pattern
+### Synthesize Operator (Done)
 
-From `openai_fake_data_generator.py` in the PoC:
+Implemented in `services/synthetic.py`. Supports two backends:
+- **Faker** — offline, deterministic fake data generation (no API key needed)
+- **LLM** — OpenAI or Azure OpenAI for more realistic synthesis
 
-```python
-# Step 1: anonymize with replace to get <ENTITY> placeholders
-replaced = anonymizer.anonymize(text, analyze_results, operators={"DEFAULT": OperatorConfig("replace", {})})
-
-# Step 2: prompt GPT to fill in realistic fake values
-prompt = f"""
-Replace placeholders like <PERSON>, <EMAIL_ADDRESS> with realistic fake values.
-Keep formatting identical. Only output the replaced text.
-
-Input: {replaced.text}
-Output:"""
-
-client = OpenAI(api_key=os.getenv("OPENAI_KEY"))
-response = client.completions.create(model="gpt-3.5-turbo-instruct", prompt=prompt, max_tokens=256)
-fake_text = response.choices[0].text.strip()
-```
-
-Env vars: `OPENAI_KEY` (OpenAI) or `AZURE_OPENAI_KEY` + `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_DEPLOYMENT` + `OPENAI_API_VERSION` (Azure OpenAI). Gate behind a feature flag — don't crash if key is absent.
+Env vars for LLM mode: `OPENAI_KEY` (OpenAI) or `AZURE_OPENAI_KEY` + `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_DEPLOYMENT` + `OPENAI_API_VERSION` (Azure OpenAI). The feature is gated — if no key is set, Faker is used as fallback.
 
 ---
 
-### ORGANIZATION Entity — NLP Mapping Gap
+### ORGANIZATION Entity (Done)
 
-The PoC's NlpEngine config maps spaCy's `ORG` tag → `ORGANIZATION`. This entity is NOT in v2's `ALL_ENTITIES`. To add it:
-
-1. Add `"ORGANIZATION"` to `ALL_ENTITIES` in `pii_engine.py`
-2. Verify the NlpEngineProvider config in `pii_engine.py` has the mapping:
-   ```python
-   "ner_model_configuration": {
-       "model_to_presidio_entity_mapping": {
-           "ORG": "ORGANIZATION",
-           "ORGANIZATION": "ORGANIZATION",
-           ...
-       },
-       "low_confidence_score_multiplier": 0.4,   # PoC uses this to reduce ORG false positives
-       "low_score_entity_names": ["ORG", "ORGANIZATION"],
-   }
-   ```
-
-The PoC intentionally applies a `0.4` confidence multiplier to ORG detections because organization names have high false-positive rates.
+`ORGANIZATION` has been added to `ALL_ENTITIES` in `pii_engine.py` (17th entity). The NlpEngineProvider config maps spaCy's `ORG` tag → `ORGANIZATION`. Requires a trained spaCy model (`en_core_web_lg` recommended) — the blank fallback skips NER-based entities.
 
 ---
 
