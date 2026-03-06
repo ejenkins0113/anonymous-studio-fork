@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
+import tempfile
 import uuid
 from typing import Any, Dict, Iterable, Optional, Tuple
 
@@ -48,6 +50,20 @@ def resolve_upload_bytes(state: Any, file_cache: Dict[str, Dict[str, Any]], stat
         return raw_bytes, slot
 
     return None, slot
+
+
+def stage_csv_upload_for_job(job_id: str, file_name: str, raw_bytes: bytes) -> str:
+    """Persist uploaded CSV bytes to a worker-visible temp file and return path."""
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.basename(file_name or "upload.csv"))
+    root = os.path.join(
+        os.environ.get("ANON_UPLOAD_DIR", tempfile.gettempdir()),
+        "anon_studio_uploads",
+    )
+    os.makedirs(root, exist_ok=True)
+    path = os.path.join(root, f"{job_id}_{safe_name}")
+    with open(path, "wb") as out:
+        out.write(raw_bytes)
+    return path
 
 
 def parse_upload_to_df(raw_bytes: bytes, file_name: str) -> pd.DataFrame:

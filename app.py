@@ -13,7 +13,7 @@ from __future__ import annotations
 import numbers
 import logging
 import os, re, time, warnings, tempfile
-from threading import Event, Lock, Thread
+from threading import Thread
 
 _log = logging.getLogger(__name__)
 from collections import Counter
@@ -61,7 +61,6 @@ from pii_engine import (
     set_spacy_model,
     highlight_md,
 )
-from tasks import PROGRESS_REGISTRY
 from pages import PAGES
 from ui.theme import CHART_LAYOUT, DASH_STYLEKIT, MONO_COLORWAY
 from services.jobs import (
@@ -74,11 +73,19 @@ from services.jobs import (
     new_job_id,
     parse_upload_to_df,
     resolve_upload_bytes,
+    stage_csv_upload_for_job,
 )
-from services.progress_snapshots import (
-    delete_progress_snapshot,
-    read_progress_snapshot,
-    write_progress_snapshot,
+from services.app_context import AppContext
+from services.geo_signals import (
+    build_geo_place_counts as build_geo_place_counts_base,
+    normalize_geo_token as normalize_geo_token_base,
+    resolve_geo_city as resolve_geo_city_base,
+)
+from services.job_progress import (
+    clear_progress,
+    get_progress_registry,
+    persist_progress,
+    read_progress,
 )
 from services.attestation_crypto import (
     build_attestation_payload,
@@ -89,6 +96,9 @@ from services.synthetic import SyntheticConfig, synthesize_from_anonymized_text
 
 store  = get_store()
 engine = get_engine()
+# Backward-compatible alias used by tests and diagnostics.
+PROGRESS_REGISTRY = get_progress_registry()
+delete_progress_snapshot = clear_progress
 
 GEO_CITY_COORDS: Dict[str, tuple[float, float]] = {
     "new york": (40.7128, -74.0060),
@@ -206,69 +216,27 @@ def _priority_to_severity(priority: str) -> str:
     return {"critical": "critical", "high": "warning"}.get(str(priority).lower(), "info")
 
 
-
-    """Normalize free text to a comparable lowercase token for city matching."""
-    raw = str(value or "").lower()
-    if not raw:
-        return ""
-    normalized = re.sub(r"[^a-z0-9]+", " ", raw)
-    normalized = re.sub(r"\s+", " ", normalized).strip()
-    return normalized
+def _normalize_geo_token(value: Any) -> str:
+    """Compatibility wrapper around geo helper module."""
+    return normalize_geo_token_base(value)
 
 
 def _resolve_geo_city(value: Any, city_coords: Dict[str, tuple[float, float]]) -> str:
-    """Resolve arbitrary location text to a known city key when possible."""
-    token = _normalize_geo_token(value)
-    if not token:
-        return ""
-    if token in city_coords:
-        return token
-    alias = GEO_ALIAS_TO_CITY.get(token)
-    if alias:
-        return alias
-    # Common form: "Seattle, WA" / "Austin TX" -> inspect the lead token.
-    lead = token.split(" ")[0] if token else ""
-    if lead in city_coords:
-        return lead
-    for city in city_coords.keys():
-        if token.startswith(city + " ") or (" " + city + " ") in (" " + token + " "):
-            return city
-    return ""
+    """Compatibility wrapper around geo helper module."""
+    return resolve_geo_city_base(value, city_coords, GEO_ALIAS_TO_CITY)
 
 
 def _build_geo_place_counts(
     sessions: List[Any],
     city_coords: Dict[str, tuple[float, float]],
 ) -> tuple[Dict[str, int], int]:
-    """
-    Aggregate mapped geo mentions from session text + location entities.
-
-    Returns:
-        (mapped_place_counts, unmapped_location_entity_mentions)
-    """
-    place_counts: Dict[str, int] = {}
-    unmapped_mentions = 0
-
-    for sess in sessions:
-        text_token = _normalize_geo_token(getattr(sess, "original_text", "") or "")
-        if text_token:
-            for city in city_coords.keys():
-                hits = len(re.findall(rf"\b{re.escape(city)}\b", text_token))
-                if hits > 0:
-                    place_counts[city] = place_counts.get(city, 0) + hits
-
-        for ent in (getattr(sess, "entities", None) or []):
-            et = str(ent.get("Entity Type", ent.get("entity_type", ""))).upper()
-            if et not in GEO_LOCATION_ENTITY_TYPES:
-                continue
-            etxt = ent.get("Text", ent.get("text", ""))
-            city = _resolve_geo_city(etxt, city_coords)
-            if city:
-                place_counts[city] = place_counts.get(city, 0) + 1
-            elif str(etxt or "").strip():
-                unmapped_mentions += 1
-
-    return place_counts, unmapped_mentions
+    """Compatibility wrapper around geo helper module."""
+    return build_geo_place_counts_base(
+        sessions,
+        city_coords,
+        GEO_ALIAS_TO_CITY,
+        GEO_LOCATION_ENTITY_TYPES,
+    )
 
 
 def _geo_city_view(lat_values: List[float], lon_values: List[float]) -> Dict[str, Any]:
@@ -501,19 +469,19 @@ comparator_scenarios: List[Any] = []   # Scenario objects fed to <|scenario_comp
 submission_table = pd.DataFrame(columns=["Submission", "Entity", "Status", "Jobs", "Created"])
 cycle_table = pd.DataFrame(columns=["Cycle", "Frequency", "Start", "End", "Scenarios"])
 
-# ── Internal registry: job_id → scenario ─────────────────────────────────────
-_SCENARIOS: Dict[str, Any] = {}    # job_id → tc.Scenario
-_SUBMISSION_IDS: Dict[str, str] = {}  # job_id -> taipy submission id
-_EVENT_PROCESSOR: Optional[EventProcessor] = None
+# ── Runtime context / registries ─────────────────────────────────────────────
+APP_CTX = AppContext()
+# Backward-compatible aliases for existing code/tests.
+_SCENARIOS = APP_CTX.scenarios            # job_id -> tc.Scenario
+_SUBMISSION_IDS = APP_CTX.submission_ids  # job_id -> taipy submission id
 _JOB_UI_POLL_MS = max(500, int(os.environ.get("ANON_UI_PROGRESS_POLL_MS", "1000")))
 try:
     _DASH_LIVE_POLL_SEC = max(1.0, float(os.environ.get("ANON_DASH_LIVE_POLL_SEC", "3") or "3"))
 except Exception:
     _DASH_LIVE_POLL_SEC = 3.0
-_LIVE_STATE_IDS: set[str] = set()
-_LIVE_STATE_LOCK = Lock()
-_LIVE_STOP_EVENT = Event()
-_LIVE_THREAD: Optional[Thread] = None
+_LIVE_STATE_IDS = APP_CTX.live_state_ids
+_LIVE_STATE_LOCK = APP_CTX.live_state_lock
+_LIVE_STOP_EVENT = APP_CTX.live_stop_event
 try:
     _BURNDOWN_CACHE_TTL_SEC = max(0.0, float(os.environ.get("ANON_BURNDOWN_CACHE_TTL_SEC", "0") or "0"))
 except Exception:
@@ -521,36 +489,18 @@ except Exception:
 
 # ── File upload cache (bytes must live outside Taipy state — state is JSON) ───
 # Keyed by get_state_id(state) so concurrent users never share each other's uploads.
-_FILE_CACHE: Dict[str, Dict[str, Any]] = {}
-_BURNDOWN_CACHE: Dict[str, Any] = {"ts": 0.0, "sig": "", "payload": None}
+_FILE_CACHE = APP_CTX.file_cache
+_BURNDOWN_CACHE = APP_CTX.burndown_cache
 
 
 def _progress_from_sources(job_id: str) -> Dict[str, Any]:
     """Get the freshest progress payload from in-memory and durable snapshot."""
-    mem = PROGRESS_REGISTRY.get(job_id, {})
-    snap = read_progress_snapshot(job_id)
-    if not mem:
-        return snap
-    if not snap:
-        return mem
-    mem_updated = float(mem.get("updated_at", 0) or 0.0)
-    snap_updated = float(snap.get("updated_at", 0) or 0.0)
-    return {**snap, **mem} if mem_updated >= snap_updated else {**mem, **snap}
+    return read_progress(job_id)
 
 
 def _persist_progress(job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     """Persist progress in both in-memory registry and durable snapshot."""
-    if not job_id:
-        return {}
-    merged = {
-        **_progress_from_sources(job_id),
-        **(payload or {}),
-    }
-    merged["updated_at"] = float(merged.get("updated_at", 0) or 0.0) or time.time()
-    merged["ts"] = str(merged.get("ts", "") or datetime.now().isoformat(timespec="seconds"))
-    PROGRESS_REGISTRY[job_id] = merged
-    write_progress_snapshot(job_id, merged)
-    return merged
+    return persist_progress(job_id, payload)
 
 
 def _register_live_state(state) -> None:
@@ -592,24 +542,22 @@ def _live_dashboard_loop(gui: Gui) -> None:
 
 
 def _start_live_dashboard_thread(gui: Gui) -> None:
-    global _LIVE_THREAD
-    if _LIVE_THREAD is not None and _LIVE_THREAD.is_alive():
+    if APP_CTX.live_thread is not None and APP_CTX.live_thread.is_alive():
         return
     _LIVE_STOP_EVENT.clear()
-    _LIVE_THREAD = Thread(
+    APP_CTX.live_thread = Thread(
         target=_live_dashboard_loop,
         args=(gui,),
         name="anon-live-dashboard",
         daemon=True,
     )
-    _LIVE_THREAD.start()
+    APP_CTX.live_thread.start()
 
 
 def _stop_live_dashboard_thread() -> None:
-    global _LIVE_THREAD
     _LIVE_STOP_EVENT.set()
-    t = _LIVE_THREAD
-    _LIVE_THREAD = None
+    t = APP_CTX.live_thread
+    APP_CTX.live_thread = None
     if t is not None and t.is_alive():
         t.join(timeout=1.0)
 
@@ -1703,12 +1651,12 @@ def _refresh_job_health(state):
             except Exception:
                 pass
 
-    if reject_signal:
+    if status == "error":
+        state.job_run_health = "Error"
+    elif reject_signal:
         state.job_run_health = "Rejected"
     elif status == "done":
         state.job_run_health = "Completed"
-    elif status == "error":
-        state.job_run_health = "Error"
     elif status in ("idle", ""):
         state.job_run_health = "Idle"
     else:
@@ -1719,10 +1667,10 @@ def _refresh_job_health(state):
     sub_status = str(submission.get("status", "—") or "—")
     if sub_status == "—" and state.job_is_running:
         sub_status = "Submitting"
-    if reject_signal:
-        sub_status = "Rejected"
-    elif status == "error":
+    if status == "error":
         sub_status = "Failed"
+    elif reject_signal:
+        sub_status = "Rejected"
     elif status == "done" and sub_status.strip().lower() in {"—", "unknown", "submitted", "submitting"}:
         sub_status = "Completed"
     state.job_submission_status = sub_status
@@ -4010,17 +3958,6 @@ def on_file_upload(state, action, payload):
         (_log.exception("upload_error"), notify(state, "error", "File upload failed. Check the file and try again."))[1]
 
 
-def _stage_csv_upload_for_job(job_id: str, file_name: str, raw_bytes: bytes) -> str:
-    """Persist uploaded CSV bytes to a worker-visible temp file and return path."""
-    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.basename(file_name or "upload.csv"))
-    root = os.path.join(tempfile.gettempdir(), "anon_studio_uploads")
-    os.makedirs(root, exist_ok=True)
-    path = os.path.join(root, f"{job_id}_{safe_name}")
-    with open(path, "wb") as out:
-        out.write(raw_bytes)
-    return path
-
-
 def _bg_submit_job(raw_df, config):
     """
     Runs in a background thread (via invoke_long_callback).
@@ -4227,7 +4164,7 @@ def on_submit_job(state):
             notify(state, "warning", "The uploaded CSV appears empty.")
             return
         try:
-            csv_path = _stage_csv_upload_for_job(job_id, fname or "upload.csv", raw_bytes)
+            csv_path = stage_csv_upload_for_job(job_id, fname or "upload.csv", raw_bytes)
         except Exception as e:
             (_log.exception("stage_csv_error"), notify(state, "error", "Could not prepare file for processing. Try re-uploading."))[1]
             return
@@ -4404,8 +4341,7 @@ def on_download(state):
             tc.delete(sc.id)
             _SCENARIOS.pop(jid, None)
             _SUBMISSION_IDS.pop(jid, None)
-            PROGRESS_REGISTRY.pop(jid, None)
-            delete_progress_snapshot(jid)
+            clear_progress(jid)
         except Exception:
             pass  # cleanup is best-effort; don't fail the download
     except Exception as e:
@@ -4500,8 +4436,7 @@ def on_job_remove(state):
             pass
         _SCENARIOS.pop(jid, None)
         _SUBMISSION_IDS.pop(jid, None)
-        PROGRESS_REGISTRY.pop(jid, None)
-        delete_progress_snapshot(jid)
+        clear_progress(jid)
         if state.active_job_id == jid:
             state.active_job_id = ""
             state.job_active_submission_id = ""
@@ -5256,7 +5191,6 @@ gui.load_config({"title": "Anonymous Studio"})
 #  LAUNCH
 # ═══════════════════════════════════════════════════════════════════════════════
 def run_app():
-    global _EVENT_PROCESSOR
     orchestrator = None
     taipy_host = os.environ.get("TAIPY_HOST", "").strip()
     taipy_port = (os.environ.get("TAIPY_PORT", "") or os.environ.get("PORT", "")).strip()
@@ -5285,18 +5219,18 @@ def run_app():
     debug_mode = _env_flag("ANON_GUI_DEBUG", "TAIPY_DEBUG", default=False)
     _start_live_dashboard_thread(gui)
     try:
-        _EVENT_PROCESSOR = EventProcessor(gui)
-        _EVENT_PROCESSOR.broadcast_on_event(callback=on_taipy_event)
-        _EVENT_PROCESSOR.start()
+        APP_CTX.event_processor = EventProcessor(gui)
+        APP_CTX.event_processor.broadcast_on_event(callback=on_taipy_event)
+        APP_CTX.event_processor.start()
     except Exception:
-        _EVENT_PROCESSOR = None
+        APP_CTX.event_processor = None
     # ── Prometheus telemetry (opt-in via ANON_METRICS_PORT) ───────────────────
     try:
         _metrics_port = int(os.environ.get("ANON_METRICS_PORT", "0") or "0")
         if _metrics_port > 0:
             from services.telemetry import register_telemetry, start_metrics_server
-            if _EVENT_PROCESSOR is not None:
-                register_telemetry(_EVENT_PROCESSOR)
+            if APP_CTX.event_processor is not None:
+                register_telemetry(APP_CTX.event_processor)
             start_metrics_server(_metrics_port)
     except Exception as _tele_exc:
         _log.warning("[Telemetry] Failed to start metrics: %s", _tele_exc)
@@ -5337,11 +5271,12 @@ def run_app():
             else:
                 raise
     finally:
-        if _EVENT_PROCESSOR is not None:
+        if APP_CTX.event_processor is not None:
             try:
-                _EVENT_PROCESSOR.stop()
+                APP_CTX.event_processor.stop()
             except Exception:
                 pass
+            APP_CTX.event_processor = None
         if orchestrator is not None:
             try:
                 orchestrator.stop(wait=False)
