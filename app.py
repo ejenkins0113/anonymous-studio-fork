@@ -359,6 +359,10 @@ qt_has_entities    = False
 qt_settings_open   = False
 qt_allowlist_text  = ""   # comma-separated words to never flag as PII
 qt_denylist_text   = ""   # comma-separated words to always flag as PII
+qt_show_rationale  = True  # whether to include Recognizer/Rationale columns in entity table
+QT_COLUMNS_FULL    = "Entity Type;Text;Confidence;Confidence Band;Span;Recognizer;Rationale"
+QT_COLUMNS_SHORT   = "Entity Type;Text;Confidence;Confidence Band;Span"
+qt_entity_columns  = QT_COLUMNS_FULL  # dynamically updated by on_qt_show_rationale_change
 qt_ner_model_lov   = [
     "spaCy/en_core_web_lg",
     "flair/ner-english-large",
@@ -3738,6 +3742,12 @@ def on_qt_settings_open(state):
 
 def on_qt_settings_close(state):
     state.qt_settings_open = False
+
+
+def on_qt_show_rationale_change(state, var_name=None, value=None):
+    """Toggle Recognizer/Rationale columns in the entity evidence table."""
+    enabled = bool(value if value is not None else state.qt_show_rationale)
+    state.qt_entity_columns = QT_COLUMNS_FULL if enabled else QT_COLUMNS_SHORT
 
 
 def on_store_settings_open(state):

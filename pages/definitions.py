@@ -665,7 +665,7 @@ NLP Engine: <|{spacy_status}|text|>
 
 <|part|class_name=panel entity-evidence-panel|
 <|3. Entity Evidence|text|class_name=sh sh-top|>
-<|{qt_entity_rows}|table|columns=Entity Type;Text;Confidence;Confidence Band;Span;Recognizer;Rationale|show_all=False|page_size=8|filter=True|sortable=True|>
+<|{qt_entity_rows}|table|columns={qt_entity_columns}|show_all=False|page_size=8|filter=True|sortable=True|>
 <|{qt_entity_chart}|chart|type=plotly|figure={qt_entity_figure}|height=300px|render={qt_entity_chart_visible}|>
 |>
 
@@ -690,6 +690,10 @@ NLP Engine: <|{spacy_status}|text|>
 <|{qt_entities}|selector|lov={qt_all_entities}|multiple=True|dropdown=True|filter=True|label=Entity types to detect|class_name=fullwidth|>
 <|{qt_allowlist_text}|input|label=Allowlist — words to never flag as PII (comma-separated)|class_name=fullwidth|hover_text=e.g. "John, Acme Corp" — these exact words will be excluded from PII detection even if the model flags them.|>
 <|{qt_denylist_text}|input|label=Denylist — words to always flag as PII (comma-separated)|class_name=fullwidth|hover_text=e.g. "MyCompany, ProjectX" — these words will always be treated as PII regardless of model confidence.|>
+<|layout|columns=auto 1|gap=8px|
+<|{qt_show_rationale}|toggle|label=Show detection rationale|on_change=on_qt_show_rationale_change|hover_text=When enabled, the Entity Evidence table shows the Recognizer and Rationale columns explaining why each span was flagged as PII.|>
+<|part|>
+|>
 <|part|render={qt_operator=="synthesize"}|
 <|Synthetic Output (LLM/Faker)|text|class_name=sh sh-top|>
 <|{qt_synth_provider}|selector|lov={qt_synth_provider_lov}|dropdown=True|label=Synthetic provider|class_name=fullwidth|hover_text=faker uses local deterministic synthesis; openai/azure_openai call an LLM and fall back to faker on failure.|>
