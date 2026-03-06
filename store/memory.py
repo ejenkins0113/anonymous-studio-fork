@@ -283,6 +283,106 @@ class MemoryStore(StoreBase):
                 status="backlog", assignee="Elijah Jenkins", priority="low",
                 labels=["contracts"],
             ),
+            # ── Extra work: outstanding feature backlog from project issues ──
+            PipelineCard(
+                id="card-006", title="Allowlist / Denylist Support",
+                description=(
+                    "Add allow_list and deny_list inputs to PII Text page. "
+                    "Pass allow_list= to analyzer.analyze() and use "
+                    "ad_hoc_recognizers=[PatternRecognizer(deny_list=...)] for denylist."
+                ),
+                status="backlog", priority="medium",
+                labels=["feature", "pii-engine"],
+            ),
+            PipelineCard(
+                id="card-007", title="Encrypt Operator Key Management",
+                description=(
+                    "Add UI field for AES encryption key on PII Text page. "
+                    "Support 128/192/256-bit keys. Store key in env var, not hardcoded. "
+                    "Enable DeanonymizeEngine decrypt round-trip."
+                ),
+                status="backlog", priority="medium",
+                labels=["feature", "security"],
+            ),
+            PipelineCard(
+                id="card-008", title="ORGANIZATION Entity Support",
+                description=(
+                    "Add ORGANIZATION to ALL_ENTITIES in pii_engine.py. "
+                    "Configure ORG→ORGANIZATION NLP mapping with 0.4 confidence "
+                    "multiplier to reduce false positives."
+                ),
+                status="backlog", priority="low",
+                labels=["feature", "pii-engine"],
+            ),
+            PipelineCard(
+                id="card-009", title="REST API for PII Detection",
+                description=(
+                    "Build REST API endpoints for PII detection, de-identification, "
+                    "and pipeline CRUD using FastAPI. Add API key authentication "
+                    "and Swagger documentation."
+                ),
+                status="backlog", priority="high",
+                labels=["feature", "api"],
+            ),
+            PipelineCard(
+                id="card-010", title="MongoDB Persistence Layer",
+                description=(
+                    "Implement MongoStore backend for persistent storage of sessions, "
+                    "cards, appointments, and audit logs. Read MONGODB_URI from env. "
+                    "Replace in-memory store for production use."
+                ),
+                status="backlog", assignee="Sakshi Patel", priority="critical",
+                labels=["feature", "infrastructure"],
+            ),
+            PipelineCard(
+                id="card-011", title="Export Audit Logs as CSV/JSON",
+                description=(
+                    "Add download buttons to export audit log and pipeline data "
+                    "in CSV and JSON formats for compliance documentation sharing."
+                ),
+                status="backlog", priority="medium",
+                labels=["feature", "compliance"],
+            ),
+            PipelineCard(
+                id="card-012", title="Image PII Detection via OCR",
+                description=(
+                    "Accept PNG/JPG uploads, extract text via Tesseract OCR, "
+                    "then apply Presidio PII detection to the extracted text. "
+                    "Display annotated results."
+                ),
+                status="backlog", priority="low",
+                labels=["feature", "ocr"],
+            ),
+            PipelineCard(
+                id="card-013", title="Role-Based Authentication",
+                description=(
+                    "Implement user login with email/password and role-based access "
+                    "(Admin, Compliance Officer, Developer, Researcher). "
+                    "Store hashed passwords in MongoDB."
+                ),
+                status="backlog", priority="high",
+                labels=["feature", "security"],
+            ),
+            PipelineCard(
+                id="card-014", title="Compliance Review Notifications",
+                description=(
+                    "Send email or in-app notifications 24 hours before scheduled "
+                    "review appointments. Include appointment details and linked "
+                    "pipeline card information."
+                ),
+                status="backlog", priority="medium",
+                labels=["feature", "compliance"],
+            ),
+            PipelineCard(
+                id="card-015", title="File Attachments on Pipeline Cards",
+                description=(
+                    "Allow users to attach anonymized output files (CSV, TXT, JSON) "
+                    "to pipeline cards. Support multiple attachments per card "
+                    "with download capability."
+                ),
+                status="backlog", priority="medium",
+                labels=["feature", "pipeline"],
+            ),
         ]
         for card in demo_cards:
             self._cards[card.id] = card

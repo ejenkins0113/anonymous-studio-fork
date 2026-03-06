@@ -344,7 +344,7 @@ class TestStats:
 
 class TestSeedData:
     def test_seeded_store_has_demo_cards(self, seeded_store):
-        assert len(seeded_store.list_cards()) == 5
+        assert len(seeded_store.list_cards()) == 15
 
     def test_seeded_store_has_demo_appointments(self, seeded_store):
         assert len(seeded_store.list_appointments()) == 3
