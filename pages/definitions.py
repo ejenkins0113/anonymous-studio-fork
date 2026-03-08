@@ -498,6 +498,13 @@ Done <|{kanban_done_len}|text|class_name=kh-cnt|>
 <|{pipeline_all}|table|selected={pipeline_all_sel}|columns=Title;Priority;Assignee;Job;Labels;Attested;Updated|cell_class_name[Priority]=priority_cell_class|cell_class_name[Job]=status_cell_class|show_all=False|page_size=10|on_action=on_card_pick|>
 |>
 
+<|Export Pipeline Data|text|class_name=sh|>
+<|layout|columns=1 1 6|gap=12px|
+<|Export All CSV|button|on_action=on_pipeline_export_csv|class_name=secondary|>
+<|Export All JSON|button|on_action=on_pipeline_export_json|class_name=secondary|>
+<|part|>|>
+|>
+
 |>
 """
 
@@ -591,6 +598,13 @@ AUDIT = """
 |>
 
 <|{audit_table}|table|columns=Time;Actor;Action;Resource;Details;Severity|cell_class_name[Severity]=severity_cell_class|show_all=False|page_size=20|>
+
+<|Export|text|class_name=sh|>
+<|layout|columns=1 1 6|gap=12px|
+<|Export CSV|button|on_action=on_audit_export_csv|class_name=secondary|>
+<|Export JSON|button|on_action=on_audit_export_json|class_name=secondary|>
+<|part|>|>
+|>
 
 |>
 """

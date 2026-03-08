@@ -54,7 +54,7 @@ These features from the demo cards are still **in backlog**:
 ### New Feature Requests (Backlog)
 | Card ID | Story Title | Description | Priority | Labels |
 |---------|-------------|-------------|----------|--------|
-| card-011 | Export Audit Logs as CSV/JSON | **⚠️ LOST IMPLEMENTATION:** Repository memories reference this as implemented at app.py:5008-5072 and pages/definitions.py:593-602, but these lines don't exist. Need to re-implement from scratch. Add download buttons to export audit log and pipeline data in CSV/JSON formats | Medium | feature, compliance |
+| card-011 | Export Audit Logs as CSV/JSON | Export audit log and pipeline card data in CSV/JSON formats with download buttons on Audit and Pipeline pages | ✅ Done | feature, compliance |
 | card-012 | Image PII Detection via OCR | Accept PNG/JPG uploads, extract text via Tesseract OCR, apply Presidio PII detection | Low | feature, ocr |
 | card-013 | Role-Based Authentication | User login with email/password and RBAC (Admin, Compliance Officer, Developer, Researcher). Store hashed passwords. | High | feature, security |
 | card-014 | Compliance Review Notifications | Email/in-app notifications 24h before scheduled appointments with card details | Medium | feature, compliance |
