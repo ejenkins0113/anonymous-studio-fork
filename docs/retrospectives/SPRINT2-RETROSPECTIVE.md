@@ -20,7 +20,7 @@ This sprint focused on a **full rewrite of Anonymous Studio** from the Streamlit
 
 ### Board View
 
-![Sprint 2 Project Board - Board View](,,/../images/sprint2-board-view.png)
+![Sprint 2 Project Board - Board View](../../images/sprint2-board-view.png)
 
 ### Table View
 
