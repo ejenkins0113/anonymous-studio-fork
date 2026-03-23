@@ -71,6 +71,7 @@ from services.jobs import (
     build_job_config,
     build_queue_quality_md,
     build_result_quality_md,
+    build_sample_df,
     latest_cancellable_job,
     new_job_id,
     parse_upload_to_df,
@@ -354,6 +355,8 @@ qt_last_proc_ms    = 0.0     # timing from last engine.anonymize() call
 qt_session_saved   = False
 qt_selected_session = ""   # full session ID from table selection
 qt_sessions_data   = pd.DataFrame(columns=["ID", "Title", "Operator", "Entities", "Created", "full_id"])
+qt_card_f          = ""    # pipeline card ID to attach QT session to (empty = no link)
+qt_card_opts: List[tuple] = [("(no card)", "")]  # lov for card picker in QT page
 qt_entity_chart    = pd.DataFrame(columns=["Entity Type", "Count"])
 qt_entity_figure   = {}
 qt_entity_chart_visible = False
@@ -437,6 +440,9 @@ download_cols        = 0
 # Preview table (first 50 rows of result)
 preview_data       = pd.DataFrame()
 preview_cols: List[str]  = []
+job_before_sample_data = pd.DataFrame()
+job_after_sample_data  = pd.DataFrame()
+job_before_after_visible = False
 stats_entity_rows  = pd.DataFrame(columns=["Entity Type", "Count"])
 stats_entity_chart_figure = {}
 job_errors_data    = pd.DataFrame(columns=["Time", "Source", "Details", "Severity"])
@@ -2288,7 +2294,8 @@ def _refresh_dashboard(state):
 
         # Bar chart — last 12 sessions, processing time per session
         recent   = timing_sessions[-12:]
-        labels   = [getattr(s, "title", s.id[:8]) for s in recent]
+        raw_labels = [getattr(s, "title", s.id[:8]) for s in recent]
+        labels   = [lbl[:14] + "…" if len(lbl) > 14 else lbl for lbl in raw_labels]
         values   = [round(s.processing_ms, 1) for s in recent]
         # Colour each bar by speed: green (<50ms), amber (<200ms), red (≥200ms)
         bar_colors = [
@@ -2301,7 +2308,8 @@ def _refresh_dashboard(state):
             text=[f"{v} ms" for v in values],
             textposition="outside",
             cliponaxis=False,
-            hovertemplate="%{x}<br>%{y} ms<extra></extra>",
+            customdata=raw_labels,
+            hovertemplate="%{customdata}<br>%{y} ms<extra></extra>",
         ))
         perf_fig.update_layout(
             **{
@@ -2321,7 +2329,7 @@ def _refresh_dashboard(state):
             }
         )
         state.dash_perf_figure = perf_fig
-        state.perf_telemetry_table = pd.DataFrame({"Session": labels, "ms": values})
+        state.perf_telemetry_table = pd.DataFrame({"Session": raw_labels, "ms": values})
         state.dash_perf_visible = True
     else:
         state.dash_perf_avg_ms   = 0.0
@@ -4025,6 +4033,14 @@ def _refresh_sessions(state):
         for s in sessions
     ]
     state.qt_sessions_data = pd.DataFrame(rows, columns=["ID", "Title", "Operator", "Entities", "Created", "full_id"])
+    # Refresh card picker options for QT page session attachment
+    cards = store.list_cards()
+    card_options: List[tuple] = [("(no card)", "")]
+    for c in cards:
+        status_label = str(getattr(c, "status", "")).replace("_", " ").title()
+        title = str(getattr(c, "title", "") or "").strip()[:42]
+        card_options.append((f"{c.id[:8]} | {title} | {status_label}", c.id))
+    state.qt_card_opts = card_options
 
 
 def on_qt_save_session(state):
@@ -4035,6 +4051,7 @@ def on_qt_save_session(state):
     counts: Dict[str, int] = {}
     for _, row in state.qt_entity_rows.iterrows():
         counts[row["Entity Type"]] = counts.get(row["Entity Type"], 0) + 1
+    card_id = str(getattr(state, "qt_card_f", "") or "").strip()
     session = PIISession(
         title=title,
         original_text=state.qt_input,
@@ -4044,14 +4061,27 @@ def on_qt_save_session(state):
         operator=state.qt_operator,
         source_type="text",
         processing_ms=float(getattr(state, "qt_last_proc_ms", 0.0) or 0.0),
+        pipeline_card_id=card_id or None,
     )
     store.add_session(session)
     store.log_user_action("user", "session.save", "session", session.id,
                           f"Saved session '{title}' ({len(counts)} entity types)")
+    if card_id:
+        linked_card = store.get_card(card_id)
+        if linked_card:
+            store.update_card(card_id, session_id=session.id)
+            store.log_user_action(
+                "user", "session.attach", "card", card_id,
+                f"Session {session.id[:8]} attached to '{linked_card.title}'",
+                severity=_priority_to_severity(getattr(linked_card, "priority", "medium")),
+            )
+        else:
+            notify(state, "warning", "Selected card not found — session saved without card link.")
     state.qt_session_saved = True
     _refresh_sessions(state)
     _refresh_dashboard(state)
-    notify(state, "success", f"Session saved (ID: {session.id[:8]})")
+    notify(state, "success", f"Session saved (ID: {session.id[:8]})"
+           + (f" → card {card_id[:8]}" if card_id else ""))
 
 
 def on_qt_load_session(state):
@@ -4474,6 +4504,11 @@ def _load_job_results(state, jid: str):
         else:
             state.stats_entity_chart_figure = {}
         state.job_quality_md = build_result_quality_md(stats_data, anon_df)
+        before_df = build_sample_df((stats_data or {}).get("sample_before"))
+        after_df  = build_sample_df((stats_data or {}).get("sample_after"))
+        state.job_before_sample_data  = before_df
+        state.job_after_sample_data   = after_df
+        state.job_before_after_visible = not before_df.empty or not after_df.empty
         if anon_df is not None and not anon_df.empty:
             preview = anon_df.head(50)
             state.preview_data         = preview

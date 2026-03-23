@@ -101,6 +101,30 @@ class TestPIISession:
         result = store.list_sessions_by_card(card.id)
         assert len(result) == 3
 
+    def test_attach_session_to_card_updates_session_id(self, store):
+        """Attaching a session to a card updates the card's session_id field."""
+        card = PipelineCard(title="Work Item")
+        store.add_card(card)
+        session = PIISession(title="Run 1", pipeline_card_id=card.id)
+        store.add_session(session)
+        store.update_card(card.id, session_id=session.id)
+        updated = store.get_card(card.id)
+        assert updated.session_id == session.id
+
+    def test_attach_session_audit_entry(self, store):
+        """Logging session.attach emits a retrievable audit entry on the card."""
+        card = PipelineCard(title="Audit Card")
+        store.add_card(card)
+        session = PIISession(title="Run A", pipeline_card_id=card.id)
+        store.add_session(session)
+        store.log_user_action("user", "session.attach", "card", card.id,
+                              f"Session {session.id[:8]} attached")
+        audit = store.list_audit()
+        assert any(
+            e.action == "session.attach" and e.resource_id == card.id
+            for e in audit
+        )
+
     def test_update_session_changes_field(self, store):
         s = PIISession(title="Before")
         store.add_session(s)

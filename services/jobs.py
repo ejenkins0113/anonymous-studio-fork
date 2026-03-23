@@ -191,6 +191,17 @@ def build_entity_stats_df(stats_data: Optional[Dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["Entity Type", "Count"])
 
 
+def build_sample_df(records: Any) -> pd.DataFrame:
+    """Convert a list-of-dicts sample (sample_before / sample_after from job_stats)
+    into a DataFrame suitable for display.  Returns an empty DataFrame on bad input."""
+    if not records or not isinstance(records, list):
+        return pd.DataFrame()
+    try:
+        return pd.DataFrame(records).fillna("")
+    except (ValueError, TypeError, KeyError):
+        return pd.DataFrame()
+
+
 def latest_cancellable_job(jobs: Iterable[Any]) -> Optional[Any]:
     for job in reversed(list(jobs)):
         status_name = getattr(getattr(job, "status", None), "name", "")
