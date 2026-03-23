@@ -1,20 +1,7 @@
 """Taipy page markup definitions for Anonymous Studio."""
 
-# ─── Dashboard ────────────────────────────────────────────────────────────────
-DASH = """
-<|part|class_name=pg pg-dashboard|
-
-<|part|class_name=page-hd|
-<|Dashboard|text|class_name=page-title|>
-<|Live pipeline status, recent activity, and upcoming compliance reviews|text|class_name=page-sub|hover_text=Live pipeline status, recent activity, and upcoming compliance reviews|>
-|>
-
-<|part|class_name=nlp-banner|
-<|Settings|button|on_action=on_store_settings_open|class_name=secondary plain|hover_text=Change store backend|>
-<|Store|text|class_name=banner-label ml-auto|>
-<|{store_status_label}|text|class_name=store-mode-pill|hover_text={store_status_hover}|>
-|>
-
+# ─── Shared Store Settings dialog (used by DASH and JOBS) ────────────────────
+_STORE_SETTINGS_DIALOG = """
 <|{store_settings_open}|dialog|title=Store Settings|width=640px|
 <|{store_backend_sel}|selector|lov={store_backend_lov}|label=Backend|class_name=fullwidth|>
 <|part|render={store_backend_sel=="mongo"}|
@@ -31,7 +18,23 @@ DASH = """
 <|Cancel|button|on_action=on_store_settings_close|class_name=secondary|>
 |>
 |>
+"""
 
+# ─── Dashboard ────────────────────────────────────────────────────────────────
+DASH = """
+<|part|class_name=pg pg-dashboard|
+
+<|part|class_name=page-hd|
+<|Dashboard|text|class_name=page-title|>
+<|Live pipeline status, recent activity, and upcoming compliance reviews|text|class_name=page-sub|hover_text=Live pipeline status, recent activity, and upcoming compliance reviews|>
+|>
+
+<|part|class_name=nlp-banner|
+<|Settings|button|on_action=on_store_settings_open|class_name=secondary plain|hover_text=Change store backend|>
+<|Store|text|class_name=banner-label ml-auto|>
+<|{store_status_label}|text|class_name=store-mode-pill|hover_text={store_status_hover}|>
+|>
+""" + _STORE_SETTINGS_DIALOG + """
 <|part|class_name=dash-toolbar|
 <|layout|columns=1 2 2 4 3|gap=8px|
 <|Refresh|button|on_action=on_refresh_dashboard|class_name=secondary|>
@@ -210,24 +213,7 @@ JOBS = """
 <|{raw_input_status_label}|text|class_name=store-mode-pill|hover_text={raw_input_status_hover}|>
 <|Settings|button|on_action=on_store_settings_open|class_name=secondary plain ml-auto|hover_text=Change store backend|>
 |>
-
-<|{store_settings_open}|dialog|title=Store Settings|width=640px|
-<|{store_backend_sel}|selector|lov={store_backend_lov}|label=Backend|class_name=fullwidth|>
-<|part|render={store_backend_sel=="mongo"}|
-<|{store_mongo_uri}|input|label=MongoDB URI|class_name=fullwidth|hover_text=e.g. mongodb://localhost:27017/anon_studio or mongodb+srv://user:pass@cluster/db|>
-|>
-<|part|render={store_backend_sel=="duckdb"}|
-<|{store_duckdb_path}|input|label=DuckDB file path|class_name=fullwidth|hover_text=e.g. /tmp/anon_studio.duckdb for local persistent single-node storage.|>
-|>
-<|part|render={store_settings_msg!=""}|
-<|{store_settings_msg}|text|class_name=inline-hint|>
-|>
-<|layout|columns=1 1|gap=8px|
-<|Apply|button|on_action=on_store_apply|>
-<|Cancel|button|on_action=on_store_settings_close|class_name=secondary|>
-|>
-|>
-
+""" + _STORE_SETTINGS_DIALOG + """
 <|layout|columns=2 1|gap=24px|
 <|part|
 <|part|class_name=panel|
