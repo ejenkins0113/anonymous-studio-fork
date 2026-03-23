@@ -107,7 +107,7 @@ Considering this is the third consecutive sprint with this pattern, the energy r
 
 ### Task Scoping
 
-The detection rationale toggle (PR #63) and auth proxy validation (issue #94) were appropriately sized — both could have been taken on by any team member independently. Role-based authentication (issue #43) is larger, but its subtasks are individually scoped and will have be picked up in parallel for Sprint 4.
+The detection rationale toggle (PR #63) and auth proxy validation (issue #94) were appropriately sized - both could have been taken on by any team member independently. Role-based authentication (issue #43) is larger, but its subtasks are individually scoped and will have be picked up in parallel for Sprint 4.
 
 **Note:** May consider explicit per-person assignments for the OpenFGA epic.
 
@@ -124,11 +124,11 @@ The detection rationale toggle (PR #63) and auth proxy validation (issue #94) we
 
 ## What Didn't Go Well
 
-1. **Contribution imbalance: third consecutive sprint** — Zero direct code contributions from Diamond Hogans, Sakshi Patel, and Elijah Jenkins. The Sprint 2 action item requiring each team member to merge at least one PR was not met by any of the three.
-2. **Primary Sprint 3 feature not started** — Role-based authentication (issue #43, the main planned story) had zero activity during the sprint despite being explicitly called out in Sprint 2 action items and being assigned to Elijah Jenkins.
-3. **Sprint 2 action items ignored again** — Weekly written status updates were not posted; issues were not closed when features shipped; sprint scope was not defined before sprint start. All four Sprint 2 action items went unmet.
-4. **Very limited delivery** — Only one small UI enhancement was merged to `main`. Sprint 3 delivered substantially less than Sprint 2.
-5. **No pipeline cards advanced** — card-007 (encrypt operator) remained `in_progress`; card-013 (role-based auth) remained `backlog`. No pipeline cards moved to `done` this sprint.
+1. **Contribution imbalance: third consecutive sprint** - Zero direct code contributions from Diamond Hogans, Sakshi Patel, and Elijah Jenkins. The Sprint 2 action item requiring each team member to merge at least one PR was not met by any of the three.
+2. **Primary Sprint 3 feature not started** - Role-based authentication (issue #43, the main planned story) had zero activity during the sprint despite being explicitly called out in Sprint 2 action items and being assigned to Elijah Jenkins.
+3. **Sprint 2 action items ignored again** - Weekly written status updates were not posted; issues were not closed when features shipped; sprint scope was not defined before sprint start. All four Sprint 2 action items went unmet.
+4. **Very limited delivery** - Only one small UI enhancement was merged to `main`. Sprint 3 delivered substantially less than Sprint 2.
+5. **No pipeline cards advanced** - card-007 (encrypt operator) remained `in_progress`; card-013 (role-based auth) remained `backlog`. No pipeline cards moved to `done` this sprint.
 
 ---
 
