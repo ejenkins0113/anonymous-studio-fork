@@ -417,7 +417,7 @@ PIPELINE = """
 <|layout|columns=1 1 1 1|gap=14px|
 <|part|class_name=kc kc-gray|
 <|part|class_name=kh kh-gray|
-Backlog <|{kanban_backlog_len}|text|class_name=kh-cnt|>
+Intake <|{kanban_backlog_len}|text|class_name=kh-cnt|>
 |>
 <|{kanban_backlog}|table|selected={backlog_sel}|columns=Select;Title;Priority;Job|cell_class_name[Priority]=priority_cell_class|cell_class_name[Job]=status_cell_class|use_checkbox=True|show_all=True|on_action=on_card_pick|>
 |>

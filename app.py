@@ -4840,11 +4840,16 @@ def on_promote_primary(state):
 
 # ── Pipeline / Kanban ─────────────────────────────────────────────────────────
 def on_card_new(state):
-    state.card_id_edit = ""; state.card_title_f   = ""
-    state.card_desc_f  = ""; state.card_status_f  = "backlog"
-    state.card_type_f  = "file"; state.card_source_f = ""
-    state.card_assign_f = ""; state.card_priority_f = "medium"
-    state.card_labels_f = ""; state.card_attest_f   = ""
+    state.card_id_edit = ""
+    state.card_title_f = ""
+    state.card_desc_f = ""
+    state.card_status_f = "backlog"
+    state.card_type_f = "file"
+    state.card_source_f = ""
+    state.card_assign_f = ""
+    state.card_priority_f = "medium"
+    state.card_labels_f = ""
+    state.card_attest_f = ""
     state.card_session_f = "(none)"
     state.card_session_opts = ["(none)"] + [
         f"{s.id[:8]} — {s.title[:35]}" for s in store.list_sessions()
@@ -4854,26 +4859,44 @@ def on_card_new(state):
 
 def on_card_save(state):
     if not state.card_title_f.strip():
-        notify(state, "error", "Title is required."); return
+        notify(state, "error", "Title is required.")
+        return
+
     labels = [l.strip() for l in state.card_labels_f.split(",") if l.strip()]
+
     # Resolve selected session: "(none)" or "abc12345 — title"
     sel = state.card_session_f or "(none)"
     new_session_id = None if sel == "(none)" else sel.split(" — ")[0].strip()
+
     if state.card_id_edit:
         existing = store.get_card(state.card_id_edit)
         old_session_id = existing.session_id if existing else None
-        store.update_card(state.card_id_edit,
-                          title=state.card_title_f, description=state.card_desc_f,
-                          status=state.card_status_f, assignee=state.card_assign_f,
-                          priority=state.card_priority_f, labels=labels,
-                          attestation=state.card_attest_f,
-                          card_type=state.card_type_f, data_source=state.card_source_f,
-                          session_id=new_session_id)
-        store.log_user_action("user", "pipeline.update", "card", state.card_id_edit,
-                  f"Updated '{state.card_title_f}'",
-                  severity=_priority_to_severity(state.card_priority_f))        # Write SESSION_ATTACHED only when session actually changed
+
+        store.update_card(
+            state.card_id_edit,
+            title=state.card_title_f,
+            description=state.card_desc_f,
+            status=state.card_status_f,
+            assignee=state.card_assign_f,
+            priority=state.card_priority_f,
+            labels=labels,
+            attestation=state.card_attest_f,
+            card_type=getattr(state, "card_type_f", "file"),
+            data_source=getattr(state, "card_source_f", ""),
+            session_id=new_session_id,
+        )
+
+        store.log_user_action(
+            "user",
+            "pipeline.update",
+            "card",
+            state.card_id_edit,
+            f"Updated '{state.card_title_f}'",
+            severity=_priority_to_severity(state.card_priority_f),
+        )
+
+        # Write session.attach only when session actually changed
         if new_session_id and old_session_id != new_session_id:
-            # Prevent duplicate: check no other card already holds this session
             all_cards = store.list_cards()
             already = any(
                 c.id != state.card_id_edit and c.session_id == new_session_id
@@ -4882,25 +4905,57 @@ def on_card_save(state):
             if already:
                 notify(state, "warning", "That session is already attached to another card.")
                 return
-            store.log_user_action("user", "session.attach", "card", state.card_id_edit,
-                      f"Session {new_session_id} attached to '{state.card_title_f}'",
-                      severity=_priority_to_severity(state.card_priority_f))
+
+            store.log_user_action(
+                "user",
+                "session.attach",
+                "card",
+                state.card_id_edit,
+                f"Session {new_session_id} attached to '{state.card_title_f}'",
+                severity=_priority_to_severity(state.card_priority_f),
+            )
             store.update_session(new_session_id, pipeline_card_id=state.card_id_edit)
+
         notify(state, "success", "Card updated.")
+
     else:
-        c = PipelineCard(title=state.card_title_f, description=state.card_desc_f,
-                         status=state.card_status_f, assignee=state.card_assign_f,
-                         priority=state.card_priority_f, labels=labels,
-                         attestation=state.card_attest_f,
-                         card_type=state.card_type_f, data_source=state.card_source_f,
-                         session_id=new_session_id)
+        c = PipelineCard(
+            title=state.card_title_f,
+            description=state.card_desc_f,
+            status=state.card_status_f,
+            assignee=state.card_assign_f,
+            priority=state.card_priority_f,
+            labels=labels,
+            attestation=state.card_attest_f,
+            card_type=getattr(state, "card_type_f", "file"),
+            data_source=getattr(state, "card_source_f", ""),
+            session_id=new_session_id,
+        )
+
         store.add_card(c)
+
+        store.log_user_action(
+            "user",
+            "CARD_CREATED",
+            "card",
+            c.id,
+            f"Created '{state.card_title_f}' in Intake",
+            severity=_priority_to_severity(state.card_priority_f),
+        )
+
         if new_session_id:
-            store.log_user_action("user", "session.attach", "card", c.id,
-                      f"Session {new_session_id} attached to '{state.card_title_f}'",
-                      severity=_priority_to_severity(state.card_priority_f))
+            store.log_user_action(
+                "user",
+                "session.attach",
+                "card",
+                c.id,
+                f"Session {new_session_id} attached to '{state.card_title_f}'",
+                severity=_priority_to_severity(state.card_priority_f),
+            )
             store.update_session(new_session_id, pipeline_card_id=c.id)
+
         notify(state, "success", f"Card '{state.card_title_f}' created.")
+
     state.card_form_open = False
     _refresh_pipeline(state)
     _refresh_audit(state)
