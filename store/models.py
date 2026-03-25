@@ -157,3 +157,10 @@ class AuditEntry:
     resource_id: str   = ""
     details: str       = ""
     severity: str      = "info"  # info | warning | critical
+
+@dataclass
+class User:
+    user_id: str
+    email: str
+    role: str  # admin or guest
+    created_at: str
