@@ -5650,6 +5650,25 @@ def run_app():
                 pass
         _stop_live_dashboard_thread()
 
+def demo_authz(user, action):
+    if user == "admin":
+        return "ALLOW"
+    elif user == "guest" and action == "read":
+        return "ALLOW"
+    else:
+        return "DENY"
+
+
+print("Admin trying delete:", demo_authz("admin", "delete"))
+print("Guest trying read:", demo_authz("guest", "read"))
+print("Guest trying delete:", demo_authz("guest", "delete"))
+
+authz_results = [
+    "Admin trying delete: " + demo_authz("admin", "delete"),
+    "Guest trying read: " + demo_authz("guest", "read"),
+    "Guest trying delete: " + demo_authz("guest", "delete"),
+]
+
 
 if __name__ == "__main__":
     run_app()
