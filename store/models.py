@@ -158,9 +158,26 @@ class AuditEntry:
     details: str       = ""
     severity: str      = "info"  # info | warning | critical
 
+<<<<<<< Updated upstream
 @dataclass
 class User:
     user_id: str
     email: str
     role: str  # admin or guest
     created_at: str
+=======
+
+@dataclass
+class UserAccount:
+    """Application user record for local email/password authentication."""
+
+    id: str                      = field(default_factory=_uid)
+    email: str                   = ""
+    password_hash: str           = ""
+    role: str                    = "Researcher"
+    full_name: str               = ""
+    is_active: bool              = True
+    created_at: str              = field(default_factory=_now)
+    updated_at: str              = field(default_factory=_now)
+    last_login_at: Optional[str] = None
+>>>>>>> Stashed changes

@@ -1,7 +1,64 @@
 """Taipy page markup definitions for Anonymous Studio."""
 
+<<<<<<< Updated upstream
 # ─── Shared Store Settings dialog (used by DASH and JOBS) ────────────────────
 _STORE_SETTINGS_DIALOG = """
+=======
+AUTH = """
+<|part|class_name=pg pg-auth|
+
+<|part|class_name=page-hd|
+<|Access Control|text|class_name=page-title|>
+<|Sign in or create an account to continue. Role permissions control which pages and compliance features you can use.|text|class_name=page-sub|>
+|>
+
+<|part|render={auth_status_md!=""}|class_name=panel|
+<|{auth_status_md}|text|mode=md|class_name=audit-stmt|>
+|>
+
+<|part|render={not is_authenticated}|class_name=settings-panel|
+<|{auth_mode}|selector|lov={auth_mode_lov}|dropdown=True|label=Mode|on_change=on_auth_mode_change|class_name=fullwidth|>
+<|{auth_full_name}|input|label=Full Name|class_name=fullwidth|render={auth_mode=="Register"}|>
+<|{auth_email}|input|label=Email|class_name=fullwidth|>
+<|{auth_password}|input|password=True|label=Password|class_name=fullwidth|>
+<|{auth_confirm_password}|input|password=True|label=Confirm Password|class_name=fullwidth|render={auth_mode=="Register"}|>
+<|{auth_role}|selector|lov={auth_role_lov}|dropdown=True|label=Role|class_name=fullwidth|render={auth_mode=="Register"}|>
+<|layout|columns=1 1|gap=8px|
+<|Sign In|button|on_action=on_auth_login|render={auth_mode=="Sign In"}|>
+<|Create Account|button|on_action=on_auth_register|render={auth_mode=="Register"}|>
+<|Switch Mode|button|on_action=on_auth_toggle_mode|class_name=secondary|>
+<|Clear|button|on_action=on_auth_clear|class_name=secondary|>
+|>
+|>
+
+<|part|render={is_authenticated}|class_name=settings-panel|
+<|{auth_profile_md}|text|mode=md|class_name=audit-stmt|>
+<|{auth_access_md}|text|mode=md|class_name=inline-hint|>
+<|layout|columns=1 1|gap=8px|
+<|Go to Dashboard|button|on_action=on_auth_go_dashboard|>
+<|Sign Out|button|on_action=on_auth_logout|class_name=secondary|>
+|>
+|>
+
+|>
+"""
+
+# ─── Dashboard ────────────────────────────────────────────────────────────────
+DASH = """
+<|part|class_name=pg pg-dashboard|
+
+<|part|class_name=page-hd|
+<|Dashboard|text|class_name=page-title|>
+<|Live pipeline status, recent activity, and upcoming compliance reviews|text|class_name=page-sub|hover_text=Live pipeline status, recent activity, and upcoming compliance reviews|>
+|>
+
+<|part|class_name=nlp-banner|
+<|Settings|button|on_action=on_store_settings_open|class_name=secondary plain|hover_text=Change store backend|>
+<|Store|text|class_name=banner-label ml-auto|>
+<|{store_status_label}|text|class_name=store-mode-pill|hover_text={store_status_hover}|>
+|>
+
+>>>>>>> Stashed changes
 <|{store_settings_open}|dialog|title=Store Settings|width=640px|
 <|{store_backend_sel}|selector|lov={store_backend_lov}|label=Backend|class_name=fullwidth|>
 <|part|render={store_backend_sel=="mongo"}|
@@ -845,6 +902,7 @@ NAV = """
 
 PAGES = {
     "/":          NAV,
+    "auth":       AUTH,
     "dashboard":  DASH,
     "analyze":    QT,
     "jobs":       JOBS,

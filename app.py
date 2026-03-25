@@ -95,6 +95,7 @@ from services.attestation_crypto import (
     sign_attestation_payload,
     signature_required,
 )
+from services.local_auth import VALID_ROLES, authenticate_user, register_user
 from services.synthetic import SyntheticConfig, synthesize_from_anonymized_text
 
 store  = get_store()
@@ -219,6 +220,82 @@ def _priority_to_severity(priority: str) -> str:
     return {"critical": "critical", "high": "warning"}.get(str(priority).lower(), "info")
 
 
+def _get_user_label(state) -> str:
+    return str(getattr(state, "current_user_name", "") or getattr(state, "current_user_email", "") or "Unknown User")
+
+
+def _is_authenticated(state) -> bool:
+    return bool(getattr(state, "is_authenticated", False) and getattr(state, "current_user_role", ""))
+
+
+def _menu_for_role(role: str, is_authenticated_flag: bool) -> List[tuple[str, Icon]]:
+    if not is_authenticated_flag:
+        return [("auth", Icon("images/audit.svg", "Access"))]
+    allowed_pages = [page for page, roles in PAGE_ROLE_RULES.items() if role in roles and page != "auth"]
+    return [item for item in BASE_MENU_LOV if item[0] in allowed_pages]
+
+
+def _can_access_page(state, page: str) -> bool:
+    if page == "auth":
+        return True
+    if not _is_authenticated(state):
+        return False
+    return getattr(state, "current_user_role", "") in PAGE_ROLE_RULES.get(page, set())
+
+
+def _sync_auth_ui(state) -> None:
+    state.menu_lov = _menu_for_role(str(getattr(state, "current_user_role", "")), _is_authenticated(state))
+    if _is_authenticated(state):
+        state.auth_profile_md = (
+            f"Signed in as **{_get_user_label(state)}**  \n"
+            f"Email: `{state.current_user_email}`  \n"
+            f"Role: **{state.current_user_role}**"
+        )
+        allowed_pages = [page for page, roles in PAGE_ROLE_RULES.items() if page != "auth" and state.current_user_role in roles]
+        state.auth_access_md = "Accessible pages: " + ", ".join(page.replace("_", " ").title() for page in allowed_pages)
+    else:
+        state.auth_profile_md = "Not signed in."
+        state.auth_access_md = ""
+
+
+def _clear_auth_form(state) -> None:
+    state.auth_email = ""
+    state.auth_password = ""
+    state.auth_confirm_password = ""
+    state.auth_full_name = ""
+    state.auth_role = "Researcher"
+
+
+def _set_authenticated_user(state, user) -> None:
+    state.is_authenticated = True
+    state.current_user_id = user.id
+    state.current_user_email = user.email
+    state.current_user_name = user.full_name or user.email
+    state.current_user_role = user.role
+    _sync_auth_ui(state)
+
+
+def _clear_authenticated_user(state) -> None:
+    state.is_authenticated = False
+    state.current_user_id = ""
+    state.current_user_email = ""
+    state.current_user_name = ""
+    state.current_user_role = ""
+    _sync_auth_ui(state)
+
+
+def _require_action_role(state, action: str, feature_label: str) -> bool:
+    allowed_roles = ACTION_ROLE_RULES.get(action, set())
+    if not _is_authenticated(state):
+        notify(state, "warning", "Please sign in first.")
+        navigate(state, "auth")
+        return False
+    if allowed_roles and getattr(state, "current_user_role", "") not in allowed_roles:
+        notify(state, "error", f"{feature_label} is restricted for the {state.current_user_role} role.")
+        return False
+    return True
+
+
 def _normalize_geo_token(value: Any) -> str:
     """Compatibility wrapper around geo helper module."""
     return normalize_geo_token_base(value)
@@ -280,7 +357,8 @@ if os.environ.get("ANON_MODE", "development") == "standalone":
 # ── Navigation ────────────────────────────────────────────────────────────────
 active_page = "dashboard"
 
-menu_lov = [
+BASE_MENU_LOV = [
+    ("auth",      Icon("images/audit.svg",      "Access")),
     ("dashboard", Icon("images/dashboard.svg", "Dashboard")),
     ("analyze",   Icon("images/piitext.svg",   "Analyze Text")),
     ("jobs",      Icon("images/jobs.svg",       "Batch Jobs")),
@@ -289,6 +367,45 @@ menu_lov = [
     ("audit",     Icon("images/audit.svg",      "Audit Log")),
     ("ui_demo",   Icon("images/dashboard.svg",  "UI")),
 ]
+menu_lov = [("auth", Icon("images/audit.svg", "Access"))]
+
+PAGE_ROLE_RULES: Dict[str, set[str]] = {
+    "auth": set(VALID_ROLES),
+    "dashboard": set(VALID_ROLES),
+    "analyze": set(VALID_ROLES),
+    "jobs": {"Admin", "Compliance Officer", "Developer"},
+    "pipeline": {"Admin", "Compliance Officer", "Developer"},
+    "schedule": {"Admin", "Compliance Officer"},
+    "audit": {"Admin", "Compliance Officer"},
+    "ui_demo": {"Admin", "Compliance Officer", "Developer"},
+}
+
+ACTION_ROLE_RULES: Dict[str, set[str]] = {
+    "audit_export": {"Admin", "Compliance Officer"},
+    "pipeline_export": {"Admin", "Compliance Officer", "Developer"},
+    "appointment_manage": {"Admin", "Compliance Officer"},
+    "card_manage": {"Admin", "Compliance Officer", "Developer"},
+    "card_attest": {"Admin", "Compliance Officer"},
+    "job_submit": {"Admin", "Compliance Officer", "Developer"},
+    "demo_seed": {"Admin", "Compliance Officer", "Developer"},
+}
+
+auth_mode = "Sign In"
+auth_mode_lov = ["Sign In", "Register"]
+auth_email = ""
+auth_password = ""
+auth_confirm_password = ""
+auth_full_name = ""
+auth_role = "Researcher"
+auth_role_lov = list(VALID_ROLES)
+auth_status_md = ""
+auth_profile_md = "Not signed in."
+auth_access_md = ""
+is_authenticated = False
+current_user_id = ""
+current_user_email = ""
+current_user_name = ""
+current_user_role = ""
 
 # ── Quick-text PII (inline mode, no file upload needed) ──────────────────────
 spacy_status = get_spacy_model_status()
@@ -3290,6 +3407,12 @@ def _set_qt_entity_state(state, entities: List[Dict[str, Any]]) -> Counter:
 
 def on_init(state):
     _register_live_state(state)
+    _clear_authenticated_user(state)
+    state.auth_mode = "Sign In"
+    state.auth_mode_lov = ["Sign In", "Register"]
+    state.auth_role_lov = list(VALID_ROLES)
+    state.auth_status_md = ""
+    _clear_auth_form(state)
     state.store_status = describe_store_backend()
     state.store_status_label, state.store_status_hover = _store_status_ui(state.store_status)
     state.raw_input_status_label, state.raw_input_status_hover = _raw_input_backend_ui()
@@ -3321,12 +3444,83 @@ def on_init(state):
         _set_qt_entity_state(state, ents)
     except Exception:
         pass
-    navigate(state, "dashboard")
+    navigate(state, "auth")
 
 
 # ── Navigation ────────────────────────────────────────────────────────────────
+def on_auth_mode_change(state, var_name=None, value=None):
+    state.auth_mode = str(value or state.auth_mode or "Sign In")
+    state.auth_status_md = ""
+
+
+def on_auth_toggle_mode(state):
+    state.auth_mode = "Register" if state.auth_mode == "Sign In" else "Sign In"
+    state.auth_status_md = ""
+
+
+def on_auth_clear(state):
+    _clear_auth_form(state)
+    state.auth_status_md = ""
+
+
+def on_auth_register(state):
+    ok, message, user = register_user(
+        store,
+        email=state.auth_email,
+        password=state.auth_password,
+        confirm_password=state.auth_confirm_password,
+        role=state.auth_role,
+        full_name=state.auth_full_name,
+    )
+    if not ok:
+        state.auth_status_md = f"**Registration error:** {message}"
+        notify(state, "error", message)
+        return
+    store.log_user_action(user.email, "auth.register", "user", user.id, f"Registered with role {user.role}")
+    _set_authenticated_user(state, user)
+    _clear_auth_form(state)
+    state.auth_status_md = f"**Account created.** Signed in as `{user.email}`."
+    notify(state, "success", message)
+    navigate(state, "dashboard")
+
+
+def on_auth_login(state):
+    ok, message, user = authenticate_user(store, email=state.auth_email, password=state.auth_password)
+    if not ok:
+        state.auth_status_md = f"**Sign-in error:** {message}"
+        notify(state, "error", message)
+        return
+    store.log_user_action(user.email, "auth.login", "user", user.id, f"Signed in as {user.role}")
+    _set_authenticated_user(state, user)
+    _clear_auth_form(state)
+    state.auth_status_md = f"**Signed in.** Welcome back, `{user.email}`."
+    notify(state, "success", message)
+    navigate(state, "dashboard")
+
+
+def on_auth_logout(state):
+    actor = getattr(state, "current_user_email", "") or "anonymous"
+    user_id = getattr(state, "current_user_id", "")
+    if actor and user_id:
+        store.log_user_action(actor, "auth.logout", "user", user_id, "Signed out")
+    _clear_authenticated_user(state)
+    _clear_auth_form(state)
+    state.auth_status_md = "You have been signed out."
+    notify(state, "info", "Signed out.")
+    navigate(state, "auth")
+
+
+def on_auth_go_dashboard(state):
+    if not _is_authenticated(state):
+        notify(state, "warning", "Please sign in first.")
+        navigate(state, "auth")
+        return
+    navigate(state, "dashboard")
+    _refresh_dashboard(state)
+
+
 def on_menu_action(state, id, payload):
-    valid_pages = {"dashboard", "analyze", "jobs", "pipeline", "schedule", "audit", "ui_demo"}
+    valid_pages = {"auth", "dashboard", "analyze", "jobs", "pipeline", "schedule", "audit", "ui_demo"}
 
     def _normalize_page(value: Any) -> Optional[str]:
         if not isinstance(value, str):
@@ -3360,9 +3554,14 @@ def on_menu_action(state, id, payload):
     if page is None:
         page = _normalize_page(id)
     if page is None:
-        page = "dashboard"
+        page = "auth" if not _is_authenticated(state) else "dashboard"
+    if not _can_access_page(state, page):
+        notify(state, "warning", "That page is not available for your current role.")
+        page = "auth" if not _is_authenticated(state) else "dashboard"
     navigate(state, page)
-    if page == "dashboard":
+    if page == "auth":
+        _sync_auth_ui(state)
+    elif page == "dashboard":
         _refresh_dashboard(state)
     elif page == "analyze":
         _refresh_sessions(state)
@@ -3755,6 +3954,10 @@ def on_qt_ner_model_change(state, var_name=None, value=None):
 
 
 def on_qt_anonymize(state):
+    if not _is_authenticated(state):
+        notify(state, "warning", "Please sign in to analyze text.")
+        navigate(state, "auth")
+        return
     if not state.qt_input.strip():
         notify(state, "warning", "Enter some text first.")
         return
@@ -4333,6 +4536,8 @@ def on_submission_status_change(state, submittable, details):
 
 def on_submit_job(state):
     """Validate inputs, parse the file, then fire invoke_long_callback."""
+    if not _require_action_role(state, "job_submit", "Batch job submission"):
+        return
     # Resolve bytes from per-session cache (preferred) or Taipy's bound variable (fallback)
     sid = get_state_id(state)
     raw_bytes, _slot = resolve_upload_bytes(state, _FILE_CACHE, sid)
@@ -4840,6 +5045,7 @@ def on_promote_primary(state):
 
 # ── Pipeline / Kanban ─────────────────────────────────────────────────────────
 def on_card_new(state):
+<<<<<<< Updated upstream
     state.card_id_edit = ""
     state.card_title_f = ""
     state.card_desc_f = ""
@@ -4850,6 +5056,15 @@ def on_card_new(state):
     state.card_priority_f = "medium"
     state.card_labels_f = ""
     state.card_attest_f = ""
+=======
+    if not _require_action_role(state, "card_manage", "Pipeline editing"):
+        return
+    state.card_id_edit = ""; state.card_title_f   = ""
+    state.card_desc_f  = ""; state.card_status_f  = "backlog"
+    state.card_type_f  = "file"; state.card_source_f = ""
+    state.card_assign_f = ""; state.card_priority_f = "medium"
+    state.card_labels_f = ""; state.card_attest_f   = ""
+>>>>>>> Stashed changes
     state.card_session_f = "(none)"
     state.card_session_opts = ["(none)"] + [
         f"{s.id[:8]} — {s.title[:35]}" for s in store.list_sessions()
@@ -4858,6 +5073,8 @@ def on_card_new(state):
 
 
 def on_card_save(state):
+    if not _require_action_role(state, "card_manage", "Pipeline editing"):
+        return
     if not state.card_title_f.strip():
         notify(state, "error", "Title is required.")
         return
@@ -4967,6 +5184,8 @@ def on_card_cancel(state):
 
 
 def on_card_edit(state):
+    if not _require_action_role(state, "card_manage", "Pipeline editing"):
+        return
     cid = _get_selected_card_id(state)
     if not cid:
         notify(state, "warning", "Select a card first."); return
@@ -4994,6 +5213,8 @@ def on_card_edit(state):
 
 
 def on_card_forward(state):
+    if not _require_action_role(state, "card_manage", "Pipeline editing"):
+        return
     cid = _get_selected_card_id(state)
     if not cid:
         notify(state, "warning", "Select a card."); return
@@ -5014,6 +5235,8 @@ def on_card_forward(state):
 
 
 def on_card_back(state):
+    if not _require_action_role(state, "card_manage", "Pipeline editing"):
+        return
     cid = _get_selected_card_id(state)
     if not cid:
         notify(state, "warning", "Select a card."); return
@@ -5034,6 +5257,8 @@ def on_card_back(state):
 
 
 def on_card_delete(state):
+    if not _require_action_role(state, "card_manage", "Pipeline editing"):
+        return
     cid = _get_selected_card_id(state)
     if not cid:
         notify(state, "warning", "Select a card."); return
@@ -5044,6 +5269,8 @@ def on_card_delete(state):
 
 
 def on_attest_open(state):
+    if not _require_action_role(state, "card_attest", "Compliance attestation"):
+        return
     cid = _get_selected_card_id(state)
     if not cid:
         notify(state, "warning", "Select a card."); return
@@ -5053,6 +5280,8 @@ def on_attest_open(state):
 
 
 def on_attest_confirm(state):
+    if not _require_action_role(state, "card_attest", "Compliance attestation"):
+        return
     if not state.attest_by.strip():
         notify(state, "error", "Name required."); return
     card = store.get_card(state.attest_cid)
@@ -5148,6 +5377,8 @@ def on_card_history_close(state):
 
 # ── Schedule ──────────────────────────────────────────────────────────────────
 def on_appt_new(state):
+    if not _require_action_role(state, "appointment_manage", "Review scheduling"):
+        return
     state.appt_id_edit = ""; state.appt_title_f = "PII Review"
     state.appt_desc_f  = ""; state.appt_date_f  = None
     state.appt_time_f  = "10:00"; state.appt_dur_f = 30
@@ -5157,6 +5388,8 @@ def on_appt_new(state):
 
 
 def on_appt_save(state):
+    if not _require_action_role(state, "appointment_manage", "Review scheduling"):
+        return
     if not state.appt_title_f.strip():
         notify(state, "error", "Title required."); return
     if not state.appt_date_f:
@@ -5197,6 +5430,8 @@ def on_appt_select(state, var_name, value):
 
 
 def on_appt_edit(state):
+    if not _require_action_role(state, "appointment_manage", "Review scheduling"):
+        return
     aid = state.sel_appt_id
     if not aid:
         notify(state, "warning", "Select an appointment."); return
@@ -5219,6 +5454,8 @@ def on_appt_edit(state):
 
 
 def on_appt_delete(state):
+    if not _require_action_role(state, "appointment_manage", "Review scheduling"):
+        return
     aid = state.sel_appt_id
     if not aid:
         notify(state, "warning", "Select an appointment."); return
@@ -5239,6 +5476,8 @@ def on_audit_clear(state):
 
 def on_audit_export_csv(state):
     """Export the full audit log as a CSV download."""
+    if not _require_action_role(state, "audit_export", "Audit export"):
+        return
     try:
         entries = store.list_audit()
         if not entries:
@@ -5259,6 +5498,8 @@ def on_audit_export_csv(state):
 
 def on_audit_export_json(state):
     """Export the full audit log as a JSON download."""
+    if not _require_action_role(state, "audit_export", "Audit export"):
+        return
     try:
         entries = store.list_audit()
         if not entries:
@@ -5278,6 +5519,8 @@ def on_audit_export_json(state):
 
 def on_pipeline_export_csv(state):
     """Export all pipeline cards as a CSV download."""
+    if not _require_action_role(state, "pipeline_export", "Pipeline export"):
+        return
     try:
         cards = store.list_cards()
         if not cards:
@@ -5298,6 +5541,8 @@ def on_pipeline_export_csv(state):
 
 def on_pipeline_export_json(state):
     """Export all pipeline cards as a JSON download."""
+    if not _require_action_role(state, "pipeline_export", "Pipeline export"):
+        return
     try:
         cards = store.list_cards()
         if not cards:
@@ -5523,6 +5768,8 @@ def _seed_demo_texts():
 
 def on_dash_seed_demo(state):
     """Seed one deterministic session so empty dashboard charts populate instantly."""
+    if not _require_action_role(state, "demo_seed", "Demo data generation"):
+        return
     state.qt_input = (
         "Patient: Jane Doe, DOB: 03/15/1982\n"
         "SSN: 987-65-4321 | Email: jane.doe@hospital.org\n"

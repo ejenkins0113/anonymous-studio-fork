@@ -24,7 +24,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
-from store.models import PIISession, PipelineCard, Appointment, AuditEntry
+from store.models import PIISession, PipelineCard, Appointment, AuditEntry, UserAccount
 
 
 class StoreBase(ABC):
@@ -55,6 +55,26 @@ class StoreBase(ABC):
         Returns the updated session or None if session_id not found.
         Emits a ``session.update`` audit entry on success.
         """
+
+    @abstractmethod
+    def create_user(self, user: UserAccount) -> UserAccount:
+        """Persist a new user account."""
+
+    @abstractmethod
+    def get_user(self, user_id: str) -> Optional[UserAccount]:
+        """Return the user account or None."""
+
+    @abstractmethod
+    def get_user_by_email(self, email: str) -> Optional[UserAccount]:
+        """Return the user account for the given email or None."""
+
+    @abstractmethod
+    def update_user(self, user_id: str, **kwargs) -> Optional[UserAccount]:
+        """Update fields on an existing user account."""
+
+    @abstractmethod
+    def list_users(self) -> List[UserAccount]:
+        """Return all user accounts."""
 
     # ── Pipeline Cards ─────────────────────────────────────────────────────────
 

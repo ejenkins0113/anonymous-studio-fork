@@ -37,7 +37,7 @@ from typing import Optional
 from store.base import StoreBase
 from store.models import (
     _now, _uid,
-    PIISession, PipelineCard, Appointment, AuditEntry,
+    PIISession, PipelineCard, Appointment, AuditEntry, UserAccount,
 )
 # Import utilities for re-export
 from store.utils import (
@@ -71,6 +71,7 @@ __all__ = [
     "StoreBase",
     # Models
     "PIISession", "PipelineCard", "Appointment", "AuditEntry",
+    "UserAccount",
     # Helpers (imported by app.py)
     "_now", "_uid",
     # Data access utilities (imported from store.utils)

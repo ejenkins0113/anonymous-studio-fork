@@ -27,8 +27,9 @@ import os
 import pytest
 
 from store.memory import MemoryStore
-from store.models import PIISession, PipelineCard, Appointment, AuditEntry
+from store.models import PIISession, PipelineCard, Appointment, AuditEntry, UserAccount
 from store import get_store, _reset_store
+from services.local_auth import hash_password
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -388,6 +389,51 @@ class TestAuditLog:
     def test_audit_severity_stored(self, store):
         store.log_user_action("u", "a", "r", "id", severity="warning")
         assert store.list_audit()[0].severity == "warning"
+
+
+class TestUsers:
+    def test_create_user_roundtrip(self, store):
+        user = UserAccount(
+            email="tester@example.com",
+            full_name="Test User",
+            role="Developer",
+            password_hash=hash_password("Example123!"),
+        )
+        created = store.create_user(user)
+        assert created.id == user.id
+        assert store.get_user(user.id).email == "tester@example.com"
+
+    def test_get_user_by_email_normalizes_case(self, store):
+        user = UserAccount(
+            email="tester@example.com",
+            role="Researcher",
+            password_hash=hash_password("Example123!"),
+        )
+        store.create_user(user)
+        fetched = store.get_user_by_email("TESTER@example.com")
+        assert fetched is not None
+        assert fetched.id == user.id
+
+    def test_update_user_changes_last_login(self, store):
+        user = UserAccount(
+            email="tester@example.com",
+            role="Admin",
+            password_hash=hash_password("Example123!"),
+        )
+        store.create_user(user)
+        updated = store.update_user(user.id, last_login_at="2026-03-24T12:00:00")
+        assert updated is not None
+        assert updated.last_login_at == "2026-03-24T12:00:00"
+
+    def test_list_users_returns_created_user(self, store):
+        user = UserAccount(
+            email="tester@example.com",
+            role="Compliance Officer",
+            password_hash=hash_password("Example123!"),
+        )
+        store.create_user(user)
+        emails = [entry.email for entry in store.list_users()]
+        assert "tester@example.com" in emails
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────

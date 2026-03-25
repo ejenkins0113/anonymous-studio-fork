@@ -46,7 +46,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from store.base import StoreBase
-from store.models import PIISession, PipelineCard, Appointment, AuditEntry, _now, _uid
+from store.models import PIISession, PipelineCard, Appointment, AuditEntry, UserAccount, _now, _uid
 
 try:
     from pymongo import MongoClient, ASCENDING, DESCENDING
@@ -128,6 +128,10 @@ class MongoStore(StoreBase):
     def _sessions(self) -> Collection:
         return self._db["pii_sessions"]
 
+    @property
+    def _users(self) -> Collection:
+        return self._db["users"]
+
     def _ensure_collections(self) -> None:
         """Create the capped audit_log collection if it does not exist yet."""
         existing = self._db.list_collection_names()
@@ -145,6 +149,7 @@ class MongoStore(StoreBase):
         self._appts.create_index([("scheduled_for", ASCENDING), ("status", ASCENDING)])
         self._audit.create_index([("resource_id", ASCENDING), ("timestamp", DESCENDING)])
         self._sessions.create_index([("created_at", DESCENDING)])
+        self._users.create_index([("email", ASCENDING)], unique=True)
 
     def _log(self, actor: str, action: str, resource_type: str,
              resource_id: str, details: str = "", severity: str = "info") -> None:
@@ -191,6 +196,33 @@ class MongoStore(StoreBase):
         )
         updated = self._sessions.find_one({"_id": session_id})
         return _from_doc(PIISession, updated) if updated else None
+
+    def create_user(self, user: UserAccount) -> UserAccount:
+        self._users.insert_one(_to_doc(user))
+        self._log("system", "auth.register", "user", user.id, f"Registered {user.email}")
+        return user
+
+    def get_user(self, user_id: str) -> Optional[UserAccount]:
+        doc = self._users.find_one({"_id": user_id})
+        return _from_doc(UserAccount, doc) if doc else None
+
+    def get_user_by_email(self, email: str) -> Optional[UserAccount]:
+        doc = self._users.find_one({"email": str(email or "").strip().lower()})
+        return _from_doc(UserAccount, doc) if doc else None
+
+    def update_user(self, user_id: str, **kwargs) -> Optional[UserAccount]:
+        doc = self._users.find_one({"_id": user_id})
+        if not doc:
+            return None
+        kwargs["updated_at"] = _now()
+        self._users.update_one({"_id": user_id}, {"$set": kwargs})
+        self._log("system", "auth.user_update", "user", user_id, f"Updated user: {', '.join(kwargs.keys())}")
+        updated = self._users.find_one({"_id": user_id})
+        return _from_doc(UserAccount, updated) if updated else None
+
+    def list_users(self) -> List[UserAccount]:
+        cursor = self._users.find().sort("created_at", ASCENDING)
+        return [_from_doc(UserAccount, d) for d in cursor]
 
     # ── PipelineCard ──────────────────────────────────────────────────────────
 

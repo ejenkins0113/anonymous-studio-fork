@@ -14,7 +14,7 @@ import tempfile
 from typing import Any, Dict, List, Optional
 
 from store.base import StoreBase
-from store.models import PIISession, PipelineCard, Appointment, AuditEntry, _now
+from store.models import PIISession, PipelineCard, Appointment, AuditEntry, UserAccount, _now
 
 
 _VALID_CARD_STATUSES = frozenset({"backlog", "in_progress", "review", "done"})
@@ -94,6 +94,15 @@ class DuckDBStore(StoreBase):
             );
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+              id VARCHAR PRIMARY KEY,
+              created_at VARCHAR,
+              payload TEXT NOT NULL
+            );
+            """
+        )
 
     def _has_any_data(self) -> bool:
         row = self._conn.execute(
@@ -103,6 +112,7 @@ class DuckDBStore(StoreBase):
               + (SELECT COUNT(*) FROM pipeline_cards)
               + (SELECT COUNT(*) FROM appointments)
               + (SELECT COUNT(*) FROM audit_log)
+              + (SELECT COUNT(*) FROM users)
             """
         ).fetchone()
         return bool(row and int(row[0]) > 0)
@@ -113,6 +123,7 @@ class DuckDBStore(StoreBase):
             "pipeline_cards": "updated_at",
             "appointments": "scheduled_for",
             "audit_log": "timestamp",
+            "users": "created_at",
         }[table]
         self._conn.execute(f"DELETE FROM {table} WHERE id = ?", [rid])
         self._conn.execute(
@@ -196,6 +207,40 @@ class DuckDBStore(StoreBase):
             f"Updated session: {', '.join(kwargs.keys())}",
         )
         return session
+
+    def create_user(self, user: UserAccount) -> UserAccount:
+        self._upsert("users", user.id, user.created_at, _to_payload(user))
+        self._log("system", "auth.register", "user", user.id, f"Registered {user.email}")
+        return user
+
+    def get_user(self, user_id: str) -> Optional[UserAccount]:
+        payload = self._get_payload("users", user_id)
+        return _from_payload(UserAccount, payload) if payload else None
+
+    def get_user_by_email(self, email: str) -> Optional[UserAccount]:
+        rows = self._conn.execute(
+            "SELECT payload FROM users "
+            "WHERE lower(json_extract_string(payload::JSON, '$.email')) = ? "
+            "LIMIT 1",
+            [str(email or "").strip().lower()],
+        ).fetchall()
+        return _from_payload(UserAccount, str(rows[0][0])) if rows else None
+
+    def update_user(self, user_id: str, **kwargs) -> Optional[UserAccount]:
+        user = self.get_user(user_id)
+        if not user:
+            return None
+        for k, v in kwargs.items():
+            if hasattr(user, k):
+                setattr(user, k, v)
+        user.updated_at = _now()
+        self._upsert("users", user.id, user.created_at, _to_payload(user))
+        self._log("system", "auth.user_update", "user", user_id, f"Updated user: {', '.join(kwargs.keys())}")
+        return user
+
+    def list_users(self) -> List[UserAccount]:
+        payloads = self._list_payloads("users", "created_at", desc=False)
+        return [_from_payload(UserAccount, p) for p in payloads]
 
     # ── Pipeline cards ────────────────────────────────────────────────────────
 
@@ -393,3 +438,5 @@ class DuckDBStore(StoreBase):
             if entry.severity not in _VALID_SEVERITIES:
                 entry.severity = "info"
             self._upsert("audit_log", entry.id, entry.timestamp, _to_payload(entry))
+        for user in seed_store.list_users():
+            self._upsert("users", user.id, user.created_at, _to_payload(user))
