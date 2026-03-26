@@ -5240,11 +5240,13 @@ def on_card_delete(state):
 def on_attest_open(state):
     cid = _get_selected_card_id(state)
     if not cid:
-        notify(state, "warning", "Select a card."); return
-    state.attest_cid = cid
-    state.attest_note = ""; state.attest_by = ""
-    state.attest_open = True
+        notify(state, "warning", "Select a card.")
+        return
 
+    state.attest_cid = cid
+    state.attest_note = ""
+    state.attest_by = ""
+    state.attest_open = True
 
 def on_attest_confirm(state):
     if not state.attest_by.strip():
