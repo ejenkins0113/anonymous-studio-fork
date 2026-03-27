@@ -14,7 +14,7 @@ import dataclasses
 import json
 import numbers
 import logging
-import os, re, time, warnings, tempfile
+import os, re, time, warnings, tempfile, mimetypes
 from threading import Thread
 
 _log = logging.getLogger(__name__)
@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
+from werkzeug.utils import secure_filename
 load_dotenv()  # load .env before any os.environ reads (no-op if file absent)
 
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="spacy")
@@ -622,6 +623,145 @@ except Exception:
 _FILE_CACHE = APP_CTX.file_cache
 _BURNDOWN_CACHE = APP_CTX.burndown_cache
 
+# ── Card attachments (Issue #47) ─────────────────────────────────────────────
+ATTACHMENTS_DIR = os.path.join(tempfile.gettempdir(), "anon_studio_attachments")
+ATTACHMENTS_MANIFEST = os.path.join(ATTACHMENTS_DIR, "card_attachments_manifest.json")
+CARD_ATTACHMENT_COLS = ["id", "Name", "Kind", "Size", "Added", "Download"]
+
+
+def _ensure_attachments_dir():
+    os.makedirs(ATTACHMENTS_DIR, exist_ok=True)
+
+
+def _load_attachment_manifest():
+    _ensure_attachments_dir()
+    if not os.path.exists(ATTACHMENTS_MANIFEST):
+        return {}
+    try:
+        with open(ATTACHMENTS_MANIFEST, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_attachment_manifest(data):
+    _ensure_attachments_dir()
+    with open(ATTACHMENTS_MANIFEST, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def _format_size(num_bytes):
+    try:
+        size = int(num_bytes or 0)
+    except Exception:
+        size = 0
+    if size < 1024:
+        return f"{size} B"
+    elif size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    else:
+        return f"{size / (1024 * 1024):.1f} MB"
+
+
+def _list_card_attachments(card_id):
+    manifest = _load_attachment_manifest()
+    return manifest.get(card_id, [])
+
+
+def _attachment_exists(card_id, source_ref):
+    for rec in _list_card_attachments(card_id):
+        if rec.get("source_ref") == source_ref:
+            return True
+    return False
+
+
+def _store_attachment_record(card_id, display_name, saved_name, kind, size_bytes, mime_type="", source_ref=""):
+    manifest = _load_attachment_manifest()
+    record = {
+        "id": _uid(),
+        "card_id": card_id,
+        "display_name": display_name,
+        "saved_name": saved_name,
+        "kind": kind,
+        "size_bytes": size_bytes,
+        "mime_type": mime_type,
+        "created_at": _now(),
+        "source_ref": source_ref,
+    }
+    manifest.setdefault(card_id, []).append(record)
+    _save_attachment_manifest(manifest)
+    return record
+
+
+def _write_attachment_bytes(card_id, content, filename, kind="file", mime_type="", source_ref=""):
+    _ensure_attachments_dir()
+
+    safe_name = secure_filename(filename)
+    ext = os.path.splitext(safe_name)[1]
+    saved_name = f"{card_id[:8]}_{_uid()}{ext}"
+    full_path = os.path.join(ATTACHMENTS_DIR, saved_name)
+
+    with open(full_path, "wb") as f:
+        f.write(content)
+
+    return _store_attachment_record(
+        card_id,
+        safe_name,
+        saved_name,
+        kind,
+        len(content),
+        mime_type or "application/octet-stream",
+        source_ref,
+    )
+
+
+def _attach_text_output_to_card(card_id, text, filename, source_ref=""):
+    return _write_attachment_bytes(
+        card_id,
+        text.encode("utf-8"),
+        filename,
+        kind="text_output",
+        mime_type="text/plain",
+        source_ref=source_ref,
+    )
+
+
+def _find_attachment_record(attachment_id):
+    manifest = _load_attachment_manifest()
+    for records in manifest.values():
+        for rec in records:
+            if rec.get("id") == attachment_id:
+                return rec
+    return None
+
+
+def _delete_card_attachments(card_id):
+    manifest = _load_attachment_manifest()
+    records = manifest.pop(card_id, [])
+
+    for rec in records:
+        path = os.path.join(ATTACHMENTS_DIR, rec.get("saved_name", ""))
+        if os.path.exists(path):
+            os.remove(path)
+
+    _save_attachment_manifest(manifest)
+
+
+def _refresh_card_attachments(state, card_id):
+    records = _list_card_attachments(card_id)
+
+    rows = []
+    for rec in records:
+        rows.append({
+            "id": rec["id"],
+            "Name": rec["display_name"],
+            "Kind": rec["kind"],
+            "Size": _format_size(rec["size_bytes"]),
+            "Added": rec["created_at"][:16],
+            "Download": "Download",
+        })
+
+    state.card_attachments_data = pd.DataFrame(rows, columns=CARD_ATTACHMENT_COLS)
 
 def _progress_from_sources(job_id: str) -> Dict[str, Any]:
     """Get the freshest progress payload from in-memory and durable snapshot."""
@@ -750,6 +890,7 @@ attest_by     = ""
 card_audit_open = False
 card_audit_data = pd.DataFrame(columns=["Time", "Action", "Actor", "Details"])
 card_sessions_data = pd.DataFrame(columns=["ID", "Title", "Operator", "Entities", "Source", "Created"])
+card_attachments_data = pd.DataFrame(columns=CARD_ATTACHMENT_COLS)
 
 # ── Schedule ──────────────────────────────────────────────────────────────────
 appt_table     = pd.DataFrame(columns=["id", "Title", "Date / Time", "Duration", "Attendees", "Linked Card", "Status"])
@@ -4245,16 +4386,23 @@ def _refresh_sessions(state):
         card_options.append((f"{c.id[:8]} | {title} | {status_label}", c.id))
     state.qt_card_opts = card_options
 
-
 def on_qt_save_session(state):
     if not state.qt_anonymized_raw:
         notify(state, "warning", "Run Anonymize first before saving.")
         return
+
     title = (state.qt_input.strip().splitlines()[0][:50] or "Untitled Session")
     counts: Dict[str, int] = {}
     for _, row in state.qt_entity_rows.iterrows():
         counts[row["Entity Type"]] = counts.get(row["Entity Type"], 0) + 1
-    card_id = str(getattr(state, "qt_card_f", "") or "").strip()
+
+    raw_card = getattr(state, "qt_card_f", "") or ""
+
+    if isinstance(raw_card, (list, tuple)) and len(raw_card) >= 2:
+        card_id = str(raw_card[1]).strip()
+    else:
+        card_id = str(raw_card).strip()
+
     session = PIISession(
         title=title,
         original_text=state.qt_input,
@@ -4266,25 +4414,71 @@ def on_qt_save_session(state):
         processing_ms=float(getattr(state, "qt_last_proc_ms", 0.0) or 0.0),
         pipeline_card_id=card_id or None,
     )
-    store.add_session(session)
-    store.log_user_action("user", "session.save", "session", session.id,
-                          f"Saved session '{title}' ({len(counts)} entity types)")
+
+    try:
+        store.add_session(session)
+    except Exception as e:
+        notify(state, "error", f"Failed to save session: {e}")
+        return
+
+    try:
+        store.log_user_action(
+            "user",
+            "session.save",
+            "session",
+            session.id,
+            f"Saved session '{title}' ({len(counts)} entity types)"
+        )
+    except Exception:
+        pass
+
     if card_id:
-        linked_card = store.get_card(card_id)
-        if linked_card:
-            store.update_card(card_id, session_id=session.id)
-            store.log_user_action(
-                "user", "session.attach", "card", card_id,
-                f"Session {session.id[:8]} attached to '{linked_card.title}'",
-                severity=_priority_to_severity(getattr(linked_card, "priority", "medium")),
+        try:
+            all_cards = store.list_cards()
+            linked_card = next(
+                (c for c in all_cards if str(getattr(c, "id", "")) == card_id),
+                None
             )
-        else:
-            notify(state, "warning", "Selected card not found — session saved without card link.")
+
+            if linked_card:
+                store.update_card(card_id, session_id=session.id)
+
+                try:
+                    store.log_user_action(
+                        "user",
+                        "session.attach",
+                        "card",
+                        card_id,
+                        f"Session {session.id[:8]} attached to '{linked_card.title}'",
+                        severity=_priority_to_severity(
+                            getattr(linked_card, "priority", "medium")
+                        ),
+                    )
+                except Exception:
+                    pass
+            else:
+                notify(state, "warning", "Selected card not found — session saved without card link.")
+
+        except Exception as e:
+            notify(state, "warning", f"Session saved, but card link failed: {e}")
+
     state.qt_session_saved = True
-    _refresh_sessions(state)
-    _refresh_dashboard(state)
-    notify(state, "success", f"Session saved (ID: {session.id[:8]})"
-           + (f" → card {card_id[:8]}" if card_id else ""))
+
+    try:
+        _refresh_sessions(state)
+    except Exception:
+        pass
+
+    try:
+        _refresh_dashboard(state)
+    except Exception:
+        pass
+
+    notify(
+        state,
+        "success",
+        f"Session saved (ID: {session.id[:8]})" + (f" → card {card_id[:8]}" if card_id else "")
+    )    
 
 
 def on_qt_load_session(state):
@@ -5045,7 +5239,24 @@ def on_promote_primary(state):
 
 # ── Pipeline / Kanban ─────────────────────────────────────────────────────────
 def on_card_new(state):
-<<<<<<< Updated upstream
+    
+    state.card_attest_f = ""
+    if not _require_action_role(state, "card_manage", "Pipeline editing"):
+        return
+    state.card_id_edit = ""; state.card_title_f   = ""
+    state.card_desc_f  = ""; state.card_status_f  = "backlog"
+    state.card_type_f  = "file"; state.card_source_f = ""
+    state.card_assign_f = ""; state.card_priority_f = "medium"
+    state.card_labels_f = ""; state.card_attest_f   = ""
+    state.card_session_f = "(none)"
+    state.card_session_opts = ["(none)"] + [
+        
+    ]
+    state.card_form_open = True
+def on_card_new(state):
+    if not _require_action_role(state, "card_manage", "Pipeline editing"):
+        return
+
     state.card_id_edit = ""
     state.card_title_f = ""
     state.card_desc_f = ""
@@ -5056,21 +5267,11 @@ def on_card_new(state):
     state.card_priority_f = "medium"
     state.card_labels_f = ""
     state.card_attest_f = ""
-=======
-    if not _require_action_role(state, "card_manage", "Pipeline editing"):
-        return
-    state.card_id_edit = ""; state.card_title_f   = ""
-    state.card_desc_f  = ""; state.card_status_f  = "backlog"
-    state.card_type_f  = "file"; state.card_source_f = ""
-    state.card_assign_f = ""; state.card_priority_f = "medium"
-    state.card_labels_f = ""; state.card_attest_f   = ""
->>>>>>> Stashed changes
     state.card_session_f = "(none)"
     state.card_session_opts = ["(none)"] + [
         f"{s.id[:8]} — {s.title[:35]}" for s in store.list_sessions()
     ]
     state.card_form_open = True
-
 
 def on_card_save(state):
     if not _require_action_role(state, "card_manage", "Pipeline editing"):
@@ -5266,18 +5467,19 @@ def on_card_delete(state):
     _clear_selected_card(state, clear_selection_vars=True)
     notify(state, "success", "Card deleted.")
     _refresh_pipeline(state); _refresh_audit(state); _refresh_dashboard(state)
-
-
 def on_attest_open(state):
     if not _require_action_role(state, "card_attest", "Compliance attestation"):
         return
+
     cid = _get_selected_card_id(state)
     if not cid:
-        notify(state, "warning", "Select a card."); return
-    state.attest_cid = cid
-    state.attest_note = ""; state.attest_by = ""
-    state.attest_open = True
+        notify(state, "warning", "Select a card.")
+        return
 
+    state.attest_cid = cid
+    state.attest_note = ""
+    state.attest_by = ""
+    state.attest_open = True
 
 def on_attest_confirm(state):
     if not _require_action_role(state, "card_attest", "Compliance attestation"):
