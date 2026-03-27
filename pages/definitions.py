@@ -1,6 +1,6 @@
 """Taipy page markup definitions for Anonymous Studio."""
 
-<<<<<<< Updated upstream
+
 # ─── Shared Store Settings dialog (used by DASH and JOBS) ────────────────────
 _STORE_SETTINGS_DIALOG = """
 AUTH = """
@@ -43,6 +43,7 @@ page = """
 |>
 """
 """
+"""
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 DASH = """
@@ -52,13 +53,11 @@ DASH = """
 <|Dashboard|text|class_name=page-title|>
 <|Live pipeline status, recent activity, and upcoming compliance reviews|text|class_name=page-sub|hover_text=Live pipeline status, recent activity, and upcoming compliance reviews|>
 |>
-
 <|part|class_name=nlp-banner|
 <|Settings|button|on_action=on_store_settings_open|class_name=secondary plain|hover_text=Change store backend|>
 <|Store|text|class_name=banner-label ml-auto|>
 <|{store_status_label}|text|class_name=store-mode-pill|hover_text={store_status_hover}|>
 |>
-
 <|{store_settings_open}|dialog|title=Store Settings|width=640px|
 <|{store_backend_sel}|selector|lov={store_backend_lov}|label=Backend|class_name=fullwidth|>
 <|part|render={store_backend_sel=="mongo"}|
