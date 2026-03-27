@@ -59,7 +59,6 @@ DASH = """
 <|{store_status_label}|text|class_name=store-mode-pill|hover_text={store_status_hover}|>
 |>
 
->>>>>>> Stashed changes
 <|{store_settings_open}|dialog|title=Store Settings|width=640px|
 <|{store_backend_sel}|selector|lov={store_backend_lov}|label=Backend|class_name=fullwidth|>
 <|part|render={store_backend_sel=="mongo"}|
@@ -77,6 +76,7 @@ DASH = """
 |>
 |>
 """
+
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 DASH = """
