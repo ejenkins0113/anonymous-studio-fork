@@ -2,9 +2,8 @@
 
 
 # ─── Shared Store Settings dialog (used by DASH and JOBS) ────────────────────
-_STORE_SETTINGS_DIALOG = """
+_STORE_SETTINGS_DIALOG = ""
 AUTH = """
-page = """
 <|part|class_name=pg pg-auth|
 
 <|part|class_name=page-hd|
@@ -41,8 +40,7 @@ page = """
 |>
 
 |>
-"""
-"""
+""
 """
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
