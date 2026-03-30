@@ -15,6 +15,9 @@
 - name: sprint-3
   color: "5319e7"
   description: "Sprint 3 work item"
+- name: sprint-4
+  color: "ff6b6b"
+  description: "Sprint 4 work item"
 
 # ── Priority (MoSCoW) ───────────────────────────────────────────────────────
 - name: must-have
