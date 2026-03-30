@@ -31,6 +31,22 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torch")
 warnings.filterwarnings("ignore", message="urllib3.*", category=UserWarning)
 
 import pandas as pd
+import requests
+API_URL = "http://127.0.0.1:8000"
+
+def get_pipeline_cards():
+    try:
+        response = requests.get(f"{API_URL}/pipeline-cards")
+        return response.json()
+    except Exception as e:
+        print("API not ready yet:", e)
+        return []
+
+print("\n===== DEBUG START =====")
+cards = get_pipeline_cards()
+print("PIPELINE CARDS:", cards)
+print("===== DEBUG END =====\n")
+
 try:
     import plotly.graph_objects as go
 except Exception:  # optional: fallback if plotly is unavailable in env
@@ -4042,26 +4058,30 @@ def on_select_done_card(state):
 
 
 # ── Quick-text PII ────────────────────────────────────────────────────────────
+import requests
 def on_qt_analyze(state):
     if not state.qt_input.strip():
         notify(state, "warning", "Enter some text first.")
         return
-    allowlist = [w.strip() for w in state.qt_allowlist_text.split(",") if w.strip()]
-    denylist  = [w.strip() for w in state.qt_denylist_text.split(",") if w.strip()]
-    ents = engine.analyze(
-        state.qt_input,
-        state.qt_entities,
-        state.qt_threshold,
-        allowlist=allowlist or None,
-        denylist=denylist or None,
-    )
-    state.qt_highlight_md = highlight_md(state.qt_input, ents)
-    _set_qt_entity_state(state, ents)
-    if ents:
-        notify(state, "warning", f"{len(ents)} PII entities detected.")
-    else:
-        notify(state, "success", "No PII detected.")
 
+    try:
+        response = requests.post(
+            "http://127.0.0.1:8000/detect-pii",
+            json={"text": state.qt_input}
+        )
+        result = response.json()
+
+        state.qt_highlight_md = str(result)
+        state.qt_entity_rows = []
+        state.qt_entity_chart_visible = False
+
+        if "Possible email detected" in str(result):
+            notify(state, "warning", "PII detected through API.")
+        else:
+            notify(state, "success", "No PII detected through API.")
+    except Exception as e:
+        notify(state, "error", f"API error: {e}")
+    
 
 def on_qt_ner_model_change(state, var_name=None, value=None):
     selected = str(value if value is not None else getattr(state, "qt_ner_model_sel", "") or "").strip()
@@ -6172,6 +6192,52 @@ authz_results = [
     "Guest trying read: " + demo_authz("guest", "read"),
     "Guest trying delete: " + demo_authz("guest", "delete"),
 ]
+
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI( )
+
+class TextRequest(BaseModel):
+    text: str
+
+@app.post("/detect-pii")
+def detect_pii(data: TextRequest):
+    text = data.text
+
+    if "@" in text:
+        return {"message": "Possible email detected", "input": text}
+
+    return {"message": "No PII detected", "input": text}
+
+@app.get("/pipeline-cards")
+def get_pipeline_cards():
+    return {"message": "Pipeline cards endpoint working"}
+
+pipeline_cards = []
+
+class PipelineCard(BaseModel):
+    name: str
+    status: str
+
+@app.post("/pipeline-cards")
+def create_pipeline_card(card: PipelineCard):
+    pipeline_cards.append(card)
+    return {"message": "Pipeline card created", "card": card}
+
+@app.put("/pipeline-cards/{index}")
+def update_pipeline_card(index: int, card: PipelineCard):
+    if index < len(pipeline_cards):
+        pipeline_cards[index] = card
+        return {"message": "Pipeline card updated", "card": card}
+    return {"error": "Card not found"}
+
+@app.delete("/pipeline-cards/{index}")
+def delete_pipeline_card(index: int):
+    if index < len(pipeline_cards):
+        deleted_card = pipeline_cards.pop(index)
+        return {"message": "Pipeline card deleted", "card": deleted_card}
+    return {"error": "Card not found"}
 
 
 if __name__ == "__main__":
