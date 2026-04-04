@@ -31,7 +31,10 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torch")
 warnings.filterwarnings("ignore", message="urllib3.*", category=UserWarning)
 
 import pandas as pd
+from services.pii_image import extract_text_from_image
+from fastapi import UploadFile, File
 import requests
+from presidio_analyzer import AnalyzerEngine
 API_URL = "http://127.0.0.1:8000"
 
 def get_pipeline_cards():
@@ -6239,6 +6242,24 @@ def delete_pipeline_card(index: int):
         return {"message": "Pipeline card deleted", "card": deleted_card}
     return {"error": "Card not found"}
 
+@app.post("/detect-pii-image")
+async def detect_pii_image(file: UploadFile = File(...)):
+    contents = await file.read()
+
+    # Save temporary image
+    with open("temp_image.png", "wb") as f:
+        f.write(contents)
+
+    # Extract text using OCR
+    text = extract_text_from_image("temp_image.png")
+
+    analyzer = AnalyzerEngine()
+    results = analyzer.analyze(text=text, language="en")
+
+    return  {
+        "extracted_text": text,
+        "pii_detected": [str(r) for r in results]
+    }
 
 if __name__ == "__main__":
     run_app()
