@@ -17,7 +17,7 @@ import logging
 import scheduler
 import os, re, time, warnings, tempfile, mimetypes
 from threading import Thread
-from notifications import send_email_notification
+from services.notifications import send_email_notification
 
 _log = logging.getLogger(__name__)
 from collections import Counter
