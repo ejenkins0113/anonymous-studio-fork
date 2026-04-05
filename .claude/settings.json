@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s \"https://unpkg.com/@signozhq/design-tokens@2.1.2/dist/style.css\")",
+      "Bash(curl -s \"https://unpkg.com/@signozhq/design-tokens@2.1.2/dist/themes/signoz-tokens.css\")",
+      "Bash(marimo --help)",
+      "Bash(marimo run --help)",
+      "Bash(marimo edit --help)",
+      "Read(//temp/readonly/**)",
+      "Read(//tmp/**)",
+      "WebFetch(domain:play-clickstack.clickhouse.com)",
+      "Read(//home/51nk0r5w1m/school/capstone/**)",
+      "Bash(pip show reflex)",
+      "Bash(pip3 show reflex)",
+      "Bash(.venv/bin/pip install reflex presidio-analyzer presidio-anonymizer spacy python-dotenv plotly pandas duckdb pymongo schedule)",
+      "Bash(.venv/bin/python -m spacy download en_core_web_sm)",
+      "Bash(.venv/bin/python -c \":*)"
+    ],
+    "additionalDirectories": [
+      "/home/51nk0r5w1m/school/capstone/rtest"
+    ]
+  }
+}

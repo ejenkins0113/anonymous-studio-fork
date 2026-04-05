@@ -36,7 +36,7 @@ import logging
 import threading
 import time
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import schedule
 
@@ -140,7 +140,7 @@ def sync(appointments) -> int:
     return count
 
 
-def start(interval_s: int = 30) -> threading.Thread:
+def start(interval_s: int = 30) -> Optional[threading.Thread]:
     """Start the background runner thread (idempotent — safe to call twice).
 
     *interval_s* controls how often ``schedule.run_pending()`` is called.
@@ -148,7 +148,7 @@ def start(interval_s: int = 30) -> threading.Thread:
     """
     global _started
     if _started:
-        return None  # type: ignore[return-value]
+        return None
     _started = True
 
     def _run():
@@ -205,7 +205,7 @@ def _fire(appt_id: str) -> None:
     with _pending_lock:
         _PENDING.append({
             "level": "info",
-            "msg":   f"📅 Review due: {a.title}",
+            "msg":   f"Review due: {a.title}",
         })
 
 def _send_reminder(appt_id: str) -> None:

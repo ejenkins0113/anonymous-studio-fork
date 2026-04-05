@@ -16,6 +16,7 @@ import numbers
 import logging
 import scheduler
 import os, re, time, warnings, tempfile, mimetypes
+
 from threading import Thread
 from services.notifications import send_email_notification
 
@@ -57,7 +58,7 @@ try:
 except Exception:  # optional: fallback if plotly is unavailable in env
     go = None
 import taipy as tp
-from taipy.gui import Gui, notify, invoke_callback, invoke_long_callback, download, get_state_id, navigate, Icon
+from taipy.gui import Gui, notify, invoke_callback, download, get_state_id, navigate, Icon
 import taipy.core as tc
 from taipy.core import Status
 from taipy.event import EventProcessor
@@ -86,7 +87,17 @@ from pii_engine import (
     highlight_md,
 )
 from pages import PAGES
-from ui.theme import CHART_LAYOUT, DASH_STYLEKIT, MONO_COLORWAY
+from ui.theme import (
+    CHART_LAYOUT,
+    COLOR_ERROR,
+    COLOR_INFO,
+    COLOR_PRIMARY,
+    COLOR_SUCCESS,
+    COLOR_WARN,
+    DASH_STYLEKIT,
+    GEO_DARK_SCALE,
+    MONO_COLORWAY,
+)
 from services.jobs import (
     all_jobs_done_like,
     build_entity_stats_df,
@@ -117,7 +128,15 @@ from services.attestation_crypto import (
     sign_attestation_payload,
     signature_required,
 )
+from services.auth_identity import bind_identity_from_request_headers
+from services.authz import authz_check, principal_for
+from services.telemetry import (
+    record_job_completion,
+    get_telemetry_snapshot,
+    get_recent_events,
+)
 from services.local_auth import VALID_ROLES, authenticate_user, register_user
+
 from services.synthetic import SyntheticConfig, synthesize_from_anonymized_text
 
 store  = get_store()
@@ -187,13 +206,65 @@ def _drunken_bishop(hex_str: str, label: str = "") -> str:
     return "\n".join(rows)
 
 
+_PERSP_CDN = "https://cdn.jsdelivr.net/npm/@finos/perspective-viewer@3/dist/cdn"
+_PERSP_PSP = "https://cdn.jsdelivr.net/npm/@finos/perspective@3/dist/cdn"
+
+
+def _build_perspective_html(df: "pd.DataFrame") -> str:
+    """Return an iframe-srcdoc Perspective viewer for the given DataFrame (≤5000 rows)."""
+    import html as _esc
+    import json
+    import math
+
+    preview = df.head(5_000)
+
+    def _clean(v):
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            return None
+        return v
+
+    rows = [{k: _clean(v) for k, v in row.items()} for row in preview.to_dict(orient="records")]
+    data_js = json.dumps(rows)
+    n_rows = len(rows)
+    n_cols = len(preview.columns)
+
+    inner = f"""<!DOCTYPE html>
+<html><head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="{_PERSP_CDN}/themes/pro-dark.css">
+  <style>
+    html,body{{margin:0;padding:0;height:100%;background:#0b0c0f;overflow:hidden;}}
+    perspective-viewer{{width:100%;height:100%;display:block;}}
+  </style>
+  <script type="module">
+    import perspective from "{_PERSP_PSP}/perspective.js";
+    import "{_PERSP_CDN}/perspective-viewer.js";
+    import "{_PERSP_CDN}/perspective-viewer-datagrid.js";
+    import "{_PERSP_CDN}/perspective-viewer-d3fc.js";
+    const worker = await perspective.worker();
+    const table  = await worker.table({data_js});
+    const viewer = document.querySelector("perspective-viewer");
+    await viewer.load(table);
+    await viewer.restore({{plugin:"Datagrid",theme:"Pro Dark"}});
+  </script>
+</head><body>
+  <perspective-viewer></perspective-viewer>
+</body></html>"""
+
+    srcdoc = _esc.escape(inner, quote=True)
+    note = f"{n_rows:,} rows · {n_cols} cols · first 5 000 shown" if len(df) > n_rows else f"{n_rows:,} rows · {n_cols} cols"
+    return (
+        f'<div style="font-size:11px;color:#4d5873;margin-bottom:6px;">{note}</div>'
+        f'<iframe srcdoc="{srcdoc}" style="width:100%;height:620px;border:none;border-radius:2px;" loading="lazy"></iframe>'
+    )
+
+
 def _store_status_ui(status_text: str) -> tuple[str, str]:
-    """Return compact store label plus full hover tooltip text."""
     raw = str(status_text or "").strip()
     lower = raw.lower()
-    if lower.startswith("✓ mongodb"):
+    if lower.startswith("mongodb"):
         label = "𖠰 Mongo"
-    elif lower.startswith("✓ duckdb"):
+    elif lower.startswith("duckdb"):
         label = "𐦖 DuckDB"
     else:
         label = "⸙ In Memory"
@@ -320,6 +391,7 @@ def _require_action_role(state, action: str, feature_label: str) -> bool:
     return True
 
 
+
 def _normalize_geo_token(value: Any) -> str:
     """Compatibility wrapper around geo helper module."""
     return normalize_geo_token_base(value)
@@ -389,6 +461,7 @@ BASE_MENU_LOV = [
     ("pipeline",  Icon("images/pipeline.svg",   "Pipeline")),
     ("schedule",  Icon("images/schedule.svg",   "Reviews")),
     ("audit",     Icon("images/audit.svg",      "Audit Log")),
+    ("telemetry", Icon("images/dashboard.svg",  "Telemetry")),
     ("ui_demo",   Icon("images/dashboard.svg",  "UI")),
     ("settings",  Icon("images/settings.svg",   "Settings")),
 ]
@@ -443,16 +516,16 @@ store_status_label, store_status_hover = _store_status_ui(store_status)
 raw_input_status_label, raw_input_status_hover = _raw_input_backend_ui()
 # Bool companions for <|status|> LED widgets
 spacy_ok      = "blank" not in spacy_status.lower()
-store_ok      = store_status.startswith("✓")
+store_ok      = not store_status.startswith("Error") and not store_status.startswith("Missing") and not store_status.startswith("⚠") and not store_status.startswith("Fallback")
 raw_input_ok  = True
 
 try:
     import dask as _dask_mod
     dask_version = _dask_mod.__version__
-    dask_status  = f"✓ Dask {dask_version}"
+    dask_status  = f"Dask {dask_version}"
 except ImportError:
     dask_version = ""
-    dask_status  = "✗ Dask not installed"
+    dask_status  = "Dask not installed"
 
 # ── Store backend settings ────────────────────────────────────────────────────
 _initial_store_backend = get_store_backend_mode()
@@ -580,6 +653,10 @@ download_scenario_id = ""
 download_rows        = 0
 download_cols        = 0
 
+# Perspective viewer (CDN iframe)
+persp_html  = ""
+persp_ready = False
+
 # Preview table (first 50 rows of result)
 preview_data       = pd.DataFrame()
 preview_cols: List[str]  = []
@@ -602,7 +679,7 @@ job_processed_text = "0 / 0 rows"
 job_active_started = 0.0
 job_adv_open       = False
 job_view_tab       = "Results"
-job_view_tab_lov   = ["Results", "Job History", "Data Nodes", "Errors / Audit"]
+job_view_tab_lov   = ["Results", "Job History", "Data Nodes", "Errors", "Orchestration"]
 orchestration_scenario = None
 orchestration_job      = None
 ops_status_items: List[str] = ["Run health: Idle", "Submission: —", "Store: —"]
@@ -647,6 +724,13 @@ except Exception:
 # Keyed by get_state_id(state) so concurrent users never share each other's uploads.
 _FILE_CACHE = APP_CTX.file_cache
 _BURNDOWN_CACHE = APP_CTX.burndown_cache
+_STATS_CACHE = APP_CTX.stats_cache
+_SESSIONS_CACHE = APP_CTX.sessions_cache
+try:
+    _DASH_CACHE_TTL_SEC = max(0.0, float(os.environ.get("ANON_DASH_CACHE_TTL_SEC", "5") or "5"))
+except Exception:
+    _DASH_CACHE_TTL_SEC = 5.0
+
 
 # ── Card attachments (Issue #47) ─────────────────────────────────────────────
 ATTACHMENTS_DIR = os.path.join(tempfile.gettempdir(), "anon_studio_attachments")
@@ -810,7 +894,8 @@ def _register_live_state(state) -> None:
 def _on_live_dashboard_tick(state) -> None:
     """UI-thread callback invoked periodically for each connected client."""
     try:
-        _refresh_dashboard(state)
+        if not _sync_active_job_progress(state, load_results_on_done=True):
+            _refresh_dashboard(state)
     except Exception:
         pass
 
@@ -909,7 +994,13 @@ card_session_opts: List[str] = ["(none)"]  # populated on form open
 attest_open   = False
 attest_cid    = ""
 attest_note   = ""
-attest_by     = ""
+attest_by     = ""   # legacy — kept for Taipy state binding only; not used in attestation logic
+# Authenticated GUI identity — populated in on_init from trusted proxy headers
+gui_user        = ""
+gui_user_email  = ""
+gui_user_groups = ""
+gui_auth_identity = ""
+gui_auth_source = "unauthenticated"  # "proxy" | "break_glass" | "unauthenticated"
 
 # Per-card audit history dialog
 card_audit_open = False
@@ -987,6 +1078,7 @@ dash_report_summary_md = ""
 dash_kpi_entities_total = 0
 dash_kpi_entities_total_label = "0"
 dash_kpi_reviews_scheduled = 0
+dash_kpi_sessions_total    = 0
 dash_audit_chart = pd.DataFrame(columns=["Severity", "Count"])
 dash_priority_chart = pd.DataFrame(columns=["Priority", "Count"])
 dash_ops_trend = pd.DataFrame(columns=["Date", "Entities", "Sessions"])
@@ -997,16 +1089,36 @@ dash_priority_chart_visible = False
 dash_ops_trend_visible = False
 dash_map_visible = False
 dash_map_md = ""
+dash_alerts_md = ""
+dash_alerts_visible = False
+dash_svc_health_md = ""
 
 # Engine Performance panel (populated by _refresh_dashboard from session timing)
 # Numeric types are required by the native Taipy metric / indicator widgets.
 dash_perf_visible        = False
 dash_perf_avg_ms         = 0.0    # <|...|metric|> — avg processing latency
+dash_perf_peak_ms        = 0.0    # <|...|metric|> — peak (max) processing latency
 dash_perf_max_ms         = 50.0   # gauge upper bound, updated to 120 % of peak
 dash_perf_delta_ms       = 0.0    # latest session vs avg — negative = faster
 dash_perf_count          = 0      # <|...|metric|> — total timed sessions
 dash_perf_figure         = {}
 perf_telemetry_table     = pd.DataFrame(columns=["Session", "ms"])
+
+# ── Telemetry page ────────────────────────────────────────────────────────────
+telemetry_kpi_jobs_created  = 0
+telemetry_kpi_completed     = 0
+telemetry_kpi_failed        = 0
+telemetry_kpi_entities      = 0
+telemetry_kpi_rows          = 0
+telemetry_kpi_scenarios     = 0
+telemetry_duration_avg      = 0.0
+telemetry_duration_p95      = 0.0
+telemetry_duration_count    = 0
+telemetry_prometheus_status = "—"
+telemetry_event_table       = pd.DataFrame(columns=["Time", "Entity", "Operation", "Attribute", "Value", "ID"])
+telemetry_lifecycle_figure  = {}
+telemetry_data_figure       = {}
+telemetry_last_refresh      = "—"
 
 # ── UI (Taipy + Plotly showcase over live app data) ──────────────────────────
 ui_demo_mode = "All"
@@ -1591,6 +1703,86 @@ def _refresh_audit(state):
     state.audit_table = pd.DataFrame(rows, columns=["Time", "Actor", "Action", "Resource", "Details", "Severity"])
 
 
+def _refresh_telemetry(state) -> None:
+    """Rebuild all telemetry page state from the in-process snapshot."""
+    snap = get_telemetry_snapshot()
+    state.telemetry_kpi_jobs_created = snap.get("jobs_created", 0)
+    state.telemetry_kpi_completed    = snap.get("jobs_completed", 0)
+    state.telemetry_kpi_failed       = snap.get("jobs_failed", 0)
+    state.telemetry_kpi_entities     = snap.get("entities_detected", 0)
+    state.telemetry_kpi_rows         = snap.get("rows_processed", 0)
+    state.telemetry_kpi_scenarios    = snap.get("scenarios_created", 0)
+    state.telemetry_duration_avg     = float(snap.get("duration_avg_s") or 0.0)
+    state.telemetry_duration_p95     = float(snap.get("duration_p95_s") or 0.0)
+    state.telemetry_duration_count   = int(snap.get("duration_count", 0) or 0)
+
+    prom_ok = snap.get("prometheus_available", False)
+    port    = snap.get("metrics_port", 0)
+    if prom_ok and port > 0:
+        state.telemetry_prometheus_status = f"Prometheus active — /metrics on :{port}"
+    elif prom_ok:
+        state.telemetry_prometheus_status = "prometheus_client installed · set ANON_METRICS_PORT to expose /metrics"
+    else:
+        state.telemetry_prometheus_status = "▲ prometheus_client not installed — install with: pip install prometheus_client"
+
+    # ── Recent events table ──────────────────────────────────────────────────
+    events = get_recent_events(limit=100)
+    if events:
+        rows = [
+            {
+                "Time":      e.get("ts", "")[-8:],
+                "Entity":    e.get("entity_type", ""),
+                "Operation": e.get("operation", ""),
+                "Attribute": e.get("attribute", ""),
+                "Value":     e.get("value", "")[:30],
+                "ID":        e.get("entity_id", ""),
+            }
+            for e in reversed(events)
+        ]
+        state.telemetry_event_table = pd.DataFrame(rows)
+    else:
+        state.telemetry_event_table = pd.DataFrame(
+            columns=["Time", "Entity", "Operation", "Attribute", "Value", "ID"]
+        )
+
+    # ── Job lifecycle bar chart ──────────────────────────────────────────────
+    if go is not None:
+        created   = snap.get("jobs_created", 0)
+        running   = snap.get("jobs_running", 0)
+        completed = snap.get("jobs_completed", 0)
+        failed    = snap.get("jobs_failed", 0)
+        canceled  = snap.get("jobs_canceled", 0)
+        fig_lc = go.Figure(
+            data=[go.Bar(
+                x=["Created", "Running", "Completed", "Failed", "Canceled"],
+                y=[created, running, completed, failed, canceled],
+                marker_color=[COLOR_PRIMARY, COLOR_WARN, COLOR_SUCCESS, COLOR_ERROR, COLOR_INFO],
+            )],
+            layout={**CHART_LAYOUT, "title": {"text": "Job Lifecycle Counts", "font": {"size": 13}}},
+        )
+        state.telemetry_lifecycle_figure = fig_lc.to_dict()
+
+        # ── Data throughput chart ────────────────────────────────────────────
+        fig_data = go.Figure(
+            data=[go.Bar(
+                x=["Entities Detected", "Rows Processed", "Scenarios"],
+                y=[
+                    snap.get("entities_detected", 0),
+                    snap.get("rows_processed", 0),
+                    snap.get("scenarios_created", 0),
+                ],
+                marker_color=[COLOR_PRIMARY, COLOR_INFO, COLOR_WARN],
+            )],
+            layout={**CHART_LAYOUT, "title": {"text": "Data Throughput (cumulative)", "font": {"size": 13}}},
+        )
+        state.telemetry_data_figure = fig_data.to_dict()
+    else:
+        state.telemetry_lifecycle_figure = {}
+        state.telemetry_data_figure = {}
+
+    state.telemetry_last_refresh = datetime.now().strftime("%H:%M:%S")
+
+
 def severity_cell_class(state, value, index, row, column_name):
     sev = str(value or "").strip().lower()
     if sev == "info":
@@ -1963,7 +2155,8 @@ def _refresh_job_health(state):
         state.job_run_health = "Running"
 
     submission = _resolve_submission_state(jid)
-    state.job_active_submission_id = str(submission.get("id", "") or "")
+    raw_sub_id = str(submission.get("id", "") or "")
+    state.job_active_submission_id = raw_sub_id[:16] + "…" if len(raw_sub_id) > 16 else raw_sub_id
     sub_status = str(submission.get("status", "—") or "—")
     if sub_status == "—" and state.job_is_running:
         sub_status = "Submitting"
@@ -2138,6 +2331,30 @@ def _refresh_dashboard_displays(state, by_s: Dict[str, int]) -> None:
     )
 
 
+def _cached_stats() -> Dict[str, Any]:
+    """Return store.stats() from in-process TTL cache (default TTL 5 s)."""
+    now = time.monotonic()
+    if _STATS_CACHE["data"] is None or (now - _STATS_CACHE["ts"]) > _DASH_CACHE_TTL_SEC:
+        _STATS_CACHE["data"] = store.stats()
+        _STATS_CACHE["ts"] = now
+    return _STATS_CACHE["data"]
+
+
+def _cached_sessions() -> list:
+    """Return store.list_sessions() from in-process TTL cache (default TTL 5 s)."""
+    now = time.monotonic()
+    if _SESSIONS_CACHE["data"] is None or (now - _SESSIONS_CACHE["ts"]) > _DASH_CACHE_TTL_SEC:
+        _SESSIONS_CACHE["data"] = list(store.list_sessions())
+        _SESSIONS_CACHE["ts"] = now
+    return _SESSIONS_CACHE["data"]
+
+
+def _invalidate_store_caches() -> None:
+    """Force next dashboard refresh to re-query the store (call after writes)."""
+    _STATS_CACHE["ts"] = 0.0
+    _SESSIONS_CACHE["ts"] = 0.0
+
+
 def _refresh_dashboard(state):
     def _parse_dt(value: Any) -> Optional[datetime]:
         if isinstance(value, datetime):
@@ -2180,23 +2397,29 @@ def _refresh_dashboard(state):
         except Exception:
             return False
 
-    st = store.stats()
+    st = _cached_stats()
     prev_completion_pct = int(getattr(state, "dash_completion_pct", 0) or 0)
     prev_inflight_cards = int(getattr(state, "dash_inflight_cards", 0) or 0)
     prev_backlog_cards = int(getattr(state, "dash_backlog_cards", 0) or 0)
-    _dash_sessions = store.list_sessions()   # hoist — reused by entity chart, trend, perf panel
+    _dash_sessions = _cached_sessions()   # hoist — reused by entity chart, trend, perf panel
     state.dash_cards_total    = sum(st["pipeline_by_status"].values())
     state.dash_cards_attested = st["attested_cards"]
-    state.dash_kpi_entities_total = st.get("total_entities_redacted", 0)
-    state.dash_kpi_reviews_scheduled = len([
-        a for a in store.list_appointments() if a.status == "scheduled"
-    ])
+    state.dash_kpi_entities_total  = st.get("total_entities_redacted", 0)
+    state.dash_kpi_sessions_total  = len(_dash_sessions)
+    _dash_appointments = store.list_appointments()  # hoist — reused for KPI, upcoming, alerts
+    _now_iso = _now()
+    state.dash_kpi_reviews_scheduled = sum(
+        1 for a in _dash_appointments if a.status == "scheduled"
+    )
     all_jobs = tc.get_jobs()
     state.dash_jobs_total   = len(_SCENARIOS)
     state.dash_jobs_running = sum(1 for j in all_jobs if j.status == Status.RUNNING)
     state.dash_jobs_done    = sum(1 for j in all_jobs if j.status == Status.COMPLETED)
     state.dash_jobs_failed  = sum(1 for j in all_jobs if j.status == Status.FAILED)
-    upcoming = store.upcoming_appointments(4)
+    upcoming = sorted(
+        [a for a in _dash_appointments if a.status == "scheduled" and a.scheduled_for >= _now_iso],
+        key=lambda a: a.scheduled_for,
+    )[:4]
     html = []
     import html as _html
     for a in upcoming:
@@ -2500,7 +2723,6 @@ def _refresh_dashboard(state):
                     color=state.dash_map_chart["Mentions"],
                     colorscale=geo_scale,
                     opacity=0.94,
-                    line=dict(color="#FFF8F2", width=1.8),
                     colorbar=dict(
                         title=dict(text="Mentions", font=dict(color=map_text)),
                         x=1.02,
@@ -2575,39 +2797,60 @@ def _refresh_dashboard(state):
         state.dash_perf_count    = len(timing_ms)
         state.dash_perf_max_ms   = max(50.0, round(max(timing_ms) * 1.2, 0))
 
-        # Bar chart — last 12 sessions, processing time per session
-        recent   = timing_sessions[-12:]
-        raw_labels = [getattr(s, "title", s.id[:8]) for s in recent]
-        labels   = [lbl[:14] + "…" if len(lbl) > 14 else lbl for lbl in raw_labels]
-        values   = [round(s.processing_ms, 1) for s in recent]
+        # Horizontal bar chart — last 12 sessions, most recent at top
+        recent     = timing_sessions[-12:]
+        raw_titles = [getattr(s, "title", s.id[:8]) for s in recent]
+        values     = [round(s.processing_ms, 1) for s in recent]
+        # Truncate long session titles for display; full title surfaced in hover
+        labels = [t[:18] + "…" if len(t) > 18 else t for t in raw_titles]
+        hovers = [f"<b>{t}</b><br>{v} ms" for t, v in zip(raw_titles, values)]
         # Colour each bar by speed: green (<50ms), amber (<200ms), red (≥200ms)
         bar_colors = [
-            "#22C55E" if v < 50 else "#F59E0B" if v < 200 else "#FF2B2B"
+            "#22C55E" if v < 50 else "#F59E0B" if v < 200 else "#EF4444"
             for v in values
         ]
+        peak_ms = max(timing_ms)
+        state.dash_perf_peak_ms = round(peak_ms, 1)
         perf_fig = go.Figure(go.Bar(
-            x=labels, y=values,
-            marker=dict(color=bar_colors),
+            y=labels, x=values,
+            orientation="h",
+            marker=dict(color=bar_colors, opacity=0.88),
             text=[f"{v} ms" for v in values],
             textposition="outside",
             cliponaxis=False,
-            customdata=raw_labels,
-            hovertemplate="%{customdata}<br>%{y} ms<extra></extra>",
+            customdata=hovers,
+            hovertemplate="%{customdata}<extra></extra>",
         ))
         perf_fig.update_layout(
             **{
                 **chart_layout,
-                "margin": {"t": 28, "b": 90, "l": 50, "r": 16},
+                "margin": {"t": 28, "b": 32, "l": 10, "r": 60},
                 "xaxis": {
                     **chart_layout["xaxis"],
-                    "tickangle": -35,
-                    "tickfont": {"size": 10},
+                    "title": "milliseconds",
+                    "rangemode": "tozero",
                 },
                 "yaxis": {
                     **chart_layout["yaxis"],
-                    "title": "ms",
-                    "rangemode": "tozero",
+                    "automargin": True,
+                    "tickfont": {"size": 10},
+                    "showgrid": False,
                 },
+                "shapes": [{
+                    "type": "line",
+                    "x0": avg_ms, "x1": avg_ms,
+                    "y0": -0.5,   "y1": len(recent) - 0.5,
+                    "line": {"color": "#F59E0B", "width": 1.5, "dash": "dot"},
+                }],
+                "annotations": [{
+                    "x": avg_ms, "y": len(recent) - 0.5,
+                    "text": f"avg {avg_ms:.0f} ms",
+                    "showarrow": False,
+                    "font": {"color": "#F59E0B", "size": 9},
+                    "xanchor": "left",
+                    "yanchor": "bottom",
+                    "xshift": 4,
+                }],
                 "showlegend": False,
             }
         )
@@ -2622,6 +2865,43 @@ def _refresh_dashboard(state):
         state.dash_perf_visible  = False
         state.dash_perf_figure   = {}
         state.perf_telemetry_table = pd.DataFrame(columns=["Session", "ms"])
+
+    # ── Alert panel (Signoz-style threshold checks) ───────────────────────────
+    total_cards = sum(st["pipeline_by_status"].values())
+    alert_lines = []
+    if state.dash_jobs_failed > 0:
+        n = state.dash_jobs_failed
+        alert_lines.append(
+            f"**{n} failed job{'s' if n != 1 else ''}** — inspect in Batch Jobs"
+        )
+    overdue = [
+        a for a in _dash_appointments
+        if a.status == "scheduled" and a.scheduled_for < _now_iso
+    ]
+    if overdue:
+        n = len(overdue)
+        alert_lines.append(
+            f"**{n} overdue review{'s' if n != 1 else ''}** — past scheduled time"
+        )
+    if state.dash_backlog_cards > 15:
+        alert_lines.append(
+            f"🟡 **High backlog** — {state.dash_backlog_cards} cards waiting to start"
+        )
+    if total_cards >= 5 and state.dash_completion_pct < 20:
+        alert_lines.append(
+            f"🟡 **Low completion** — {state.dash_completion_pct}% of pipeline cards done"
+        )
+    state.dash_alerts_visible = bool(alert_lines)
+    state.dash_alerts_md = "  \n".join(alert_lines) if alert_lines else ""
+
+    # ── Service health summary ────────────────────────────────────────────────
+    nlp_icon = "Active" if getattr(state, "spacy_ok", True) else "Issue"
+    store_icon = "Active" if getattr(state, "store_ok", True) else "Issue"
+    orch_icon = "🟡" if state.dash_jobs_failed > 0 else "🟢"
+    state.dash_svc_health_md = (
+        f"{nlp_icon} **NLP**  ·  {store_icon} **Store**  ·  {orch_icon} **Orchestrator**"
+        f"  ·  **{state.dash_jobs_running}** running  ·  **{state.dash_jobs_done}** done"
+    )
 
     state.dash_has_reviews = bool(upcoming)
     state.dash_has_any_data = (
@@ -2649,8 +2929,8 @@ def _refresh_ui_demo(state) -> None:
     state.ui_demo_top_n = top_n
     state.ui_demo_mode = mode
 
-    stats = store.stats()
-    sessions = list(store.list_sessions())
+    stats = _cached_stats()
+    sessions = _cached_sessions()
     entity_counts = dict(stats.get("entity_breakdown", {}) or {})
     sorted_entities = sorted(entity_counts.items(), key=lambda x: (-x[1], x[0]))
     total_entities = int(sum(v for _, v in sorted_entities))
@@ -2769,7 +3049,11 @@ def _refresh_ui_demo(state) -> None:
                 labels=labels,
                 parents=[""] * len(labels),
                 values=counts,
-                marker=dict(colors=counts, colorscale="Blues"),
+                marker=dict(
+                    colors=counts,
+                    colorscale=GEO_DARK_SCALE,
+                    line=dict(color="#17191D", width=1),
+                ),
                 textinfo="label+value+percent root",
             )
         )
@@ -2863,8 +3147,17 @@ def _refresh_ui_demo(state) -> None:
         )
         if not tdf.empty:
             timeline_fig = go.Figure()
-            timeline_fig.add_scatter(x=tdf["Date"], y=tdf["Sessions"], mode="lines+markers", name="Sessions")
-            timeline_fig.add_bar(x=tdf["Date"], y=tdf["Entities"], name="Entities", opacity=0.45)
+            timeline_fig.add_scatter(
+                x=tdf["Date"], y=tdf["Sessions"],
+                mode="lines+markers", name="Sessions",
+                line=dict(color=COLOR_PRIMARY, width=2),
+                marker=dict(color=COLOR_PRIMARY, size=5),
+            )
+            timeline_fig.add_bar(
+                x=tdf["Date"], y=tdf["Entities"],
+                name="Entities", opacity=0.5,
+                marker_color=COLOR_SUCCESS,
+            )
             timeline_fig.update_layout(
                 **{
                     **chart_layout,
@@ -2947,7 +3240,6 @@ def _refresh_ui_demo(state) -> None:
                         outlinecolor="#E7D4C8",
                     ),
                     opacity=0.94,
-                    line=dict(color="#FFF8F2", width=1.8),
                 ),
                 hovertemplate="%{text}<extra></extra>",
             )
@@ -3509,12 +3801,15 @@ def _set_qt_entity_state(state, entities: List[Dict[str, Any]]) -> Counter:
             "yaxis": {**chart_layout["yaxis"], "automargin": True},
             "bargap": 0.22,
         }
+        _qt_n = len(qdf)
+        _qt_b = max(0, 6 - _qt_n + 1)
+        _qt_colors = [mono_colorway[min(6, _qt_b + i)] for i in range(_qt_n)]
         fig_qt = go.Figure(
             go.Bar(
                 x=qdf["Count"],
                 y=qdf["Entity Type"],
                 orientation="h",
-                marker=dict(color=mono_colorway[0]),
+                marker=dict(color=_qt_colors),
                 text=[str(int(v)) for v in qdf["Count"]],
                 textposition="outside",
                 cliponaxis=False,
@@ -3572,6 +3867,30 @@ def _set_qt_entity_state(state, entities: List[Dict[str, Any]]) -> Counter:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def on_init(state):
+    # ── Bind authenticated identity from trusted proxy headers ───────────────
+    # on_init fires inside a Flask HTTP request context (registered as a Flask
+    # URL rule at /taipy-init). flask.request.headers is fully accessible here.
+    # Runtime-verified 2026-03-22: headers present → values read; headers
+    # absent → .get() returns ""; exception path → graceful degradation.
+    try:
+        from flask import request as _freq
+        _identity = bind_identity_from_request_headers(
+            _freq.headers,
+            getattr(_freq, "remote_addr", "") or "",
+        )
+        state.gui_user = _identity.user
+        state.gui_user_email = _identity.email
+        state.gui_user_groups = _identity.groups
+        state.gui_auth_identity = _identity.email or _identity.user
+        state.gui_auth_source = _identity.auth_source
+    except Exception as _exc:
+        _log.warning("on_init: could not read proxy identity headers: %s", _exc)
+        state.gui_user        = ""
+        state.gui_user_email  = ""
+        state.gui_user_groups = ""
+        state.gui_auth_identity = ""
+        state.gui_auth_source = "unauthenticated"
+    # ── End identity binding ─────────────────────────────────────────────────
     _register_live_state(state)
     _clear_authenticated_user(state)
     state.email_notifications = True
@@ -3605,6 +3924,7 @@ def on_init(state):
     _refresh_job_table(state)
     _sync_active_job_progress(state, load_results_on_done=True)
     _refresh_sessions(state)
+    _refresh_telemetry(state)
     # Pre-populate PII Text page so it's immediately useful
     try:
         ents = engine.analyze(state.qt_input, state.qt_entities, state.qt_threshold)
@@ -3719,7 +4039,7 @@ def on_auth_go_dashboard(state):
 
 
 def on_menu_action(state, id, payload):
-    valid_pages = {"auth", "dashboard", "analyze", "jobs", "pipeline", "schedule", "audit", "ui_demo", "settings"}
+    valid_pages = {"auth", "dashboard", "analyze", "jobs", "pipeline", "schedule", "audit", "ui_demo", "telemetry", "settings"}
 
     def _normalize_page(value: Any) -> Optional[str]:
         if not isinstance(value, str):
@@ -3775,6 +4095,9 @@ def on_menu_action(state, id, payload):
     elif page == "ui_demo":
         _refresh_ui_demo(state)
         _refresh_plotly_playground(state)
+    elif page == "telemetry":
+        _refresh_telemetry(state)
+    state.active_page = page
 
     for n in scheduler.flush_notifications():
         notify(state, n["level"], n["msg"])
@@ -3792,8 +4115,33 @@ def on_taipy_event(state, event):
         op = str(getattr(event, "operation", ""))
         attr = str(getattr(event, "attribute_name", ""))
         val = str(getattr(event, "attribute_value", ""))
-        if "JOB" in ent and "UPDATE" in op and attr == "status" and "FAILED" in val.upper():
-            notify(state, "error", "A Taipy job failed. Open Errors / Audit for details.")
+        eid = str(getattr(event, "entity_id", "") or "")
+        short_id = eid[:16] if eid else "?"
+        # ── Audit trail for Taipy-native events ──────────────────────────────
+        if "SCENARIO" in ent and "CREATION" in op:
+            store.log_user_action("system", "taipy.scenario.created", "scenario", short_id,
+                                  f"Scenario created", severity="info")
+        elif "JOB" in ent and "UPDATE" in op and attr == "status":
+            val_up = val.upper()
+            if "COMPLETED" in val_up or "SKIPPED" in val_up:
+                store.log_user_action("system", "taipy.job.completed", "job", short_id,
+                                      f"Job reached status {val}", severity="info")
+            elif "FAILED" in val_up or "ABANDONED" in val_up:
+                store.log_user_action("system", "taipy.job.failed", "job", short_id,
+                                      f"Job reached status {val}", severity="warning")
+                notify(state, "error", "A Taipy job failed. Open the Errors tab for details.")
+            elif "CANCELED" in val_up:
+                store.log_user_action("system", "taipy.job.canceled", "job", short_id,
+                                      f"Job canceled", severity="info")
+            elif "RUNNING" in val_up:
+                store.log_user_action("system", "taipy.job.running", "job", short_id,
+                                      f"Job started running", severity="info")
+    except Exception:
+        pass
+    # Refresh the telemetry page if the user is viewing it.
+    try:
+        if getattr(state, "active_page", "") == "telemetry":
+            _refresh_telemetry(state)
     except Exception:
         pass
 
@@ -4106,11 +4454,33 @@ def on_select_done_card(state):
 
 
 # ── Quick-text PII ────────────────────────────────────────────────────────────
-import requests
+def _parse_word_lists(state) -> tuple[list, list]:
+    """Parse comma-separated allowlist and denylist text from state."""
+    allowlist = [w.strip() for w in state.qt_allowlist_text.split(",") if w.strip()]
+    denylist  = [w.strip() for w in state.qt_denylist_text.split(",") if w.strip()]
+    return allowlist, denylist
+
+
+
 def on_qt_analyze(state):
     if not state.qt_input.strip():
         notify(state, "warning", "Enter some text first.")
         return
+    allowlist, denylist = _parse_word_lists(state)
+    ents = engine.analyze(
+        state.qt_input,
+        state.qt_entities,
+        state.qt_threshold,
+        allowlist=allowlist or None,
+        denylist=denylist or None,
+    )
+    state.qt_highlight_md = highlight_md(state.qt_input, ents)
+    _set_qt_entity_state(state, ents)
+    if ents:
+        notify(state, "warning", f"{len(ents)} PII entities detected.")
+    else:
+        notify(state, "success", "No PII detected.")
+
 
     try:
         response = requests.post(
@@ -4170,8 +4540,7 @@ def on_qt_anonymize(state):
     if not state.qt_input.strip():
         notify(state, "warning", "Enter some text first.")
         return
-    allowlist = [w.strip() for w in state.qt_allowlist_text.split(",") if w.strip()]
-    denylist  = [w.strip() for w in state.qt_denylist_text.split(",") if w.strip()]
+    allowlist, denylist = _parse_word_lists(state)
     t0 = time.perf_counter()
     qt_operator = str(getattr(state, "qt_operator", "replace") or "replace").strip().lower()
     operator_for_engine = "replace" if qt_operator == "synthesize" else qt_operator
@@ -4322,10 +4691,10 @@ def on_store_apply(state):
     duckdb_path = (state.store_duckdb_path or "").strip()
 
     if backend == "mongo" and not uri:
-        state.store_settings_msg = "⚠ MongoDB URI is required (e.g. mongodb://localhost:27017/anon_studio)."
+        state.store_settings_msg = "MongoDB URI is required (e.g. mongodb://localhost:27017/anon_studio)."
         return
     if backend == "duckdb" and not duckdb_path:
-        state.store_settings_msg = "⚠ DuckDB path is required (e.g. /tmp/anon_studio.duckdb)."
+        state.store_settings_msg = "DuckDB path is required (e.g. /tmp/anon_studio.duckdb)."
         return
 
     os.environ["ANON_STORE_BACKEND"] = backend
@@ -4373,16 +4742,16 @@ def on_store_apply(state):
         state.store_backend_sel = get_store_backend_mode()
         if backend == "mongo":
             state.store_settings_msg = (
-                f"⚠ pymongo is not installed. Kept previous backend. "
+                f"pymongo is not installed. Kept previous backend. "
                 f"Run: pip install 'pymongo[srv]>=4.7' ({exc})"
             )
         elif backend == "duckdb":
             state.store_settings_msg = (
-                f"⚠ duckdb is not installed. Kept previous backend. "
+                f"duckdb is not installed. Kept previous backend. "
                 f"Run: pip install 'duckdb>=1.0' ({exc})"
             )
         else:
-            state.store_settings_msg = f"⚠ Backend dependency missing: {exc}"
+            state.store_settings_msg = f"Backend dependency missing: {exc}"
     except Exception as exc:
         # Connection/setup failure: keep the previous backend instead of forcing memory.
         os.environ["ANON_STORE_BACKEND"] = prev_backend
@@ -4401,7 +4770,7 @@ def on_store_apply(state):
         state.store_status = status_text
         state.store_status_label, state.store_status_hover = _store_status_ui(status_text)
         state.store_backend_sel = get_store_backend_mode()
-        state.store_settings_msg = f"⚠ Connection failed. Kept previous backend: {exc}"
+        state.store_settings_msg = f"Connection failed. Kept previous backend: {exc}"
 
 
 def on_qt_clear(state):
@@ -4530,6 +4899,7 @@ def on_qt_save_session(state):
         except Exception as e:
             notify(state, "warning", f"Session saved, but card link failed: {e}")
 
+
     state.qt_session_saved = True
 
     try:
@@ -4628,15 +4998,16 @@ def on_file_upload(state, action, payload):
         state.job_file_hash = file_hash
         state.job_file_art  = _drunken_bishop(file_hash, name)
         notify(state, "success", f"{name} ready.")
-    except Exception as e:
-        (_log.exception("upload_error"), notify(state, "error", "File upload failed. Check the file and try again."))[1]
+    except Exception:
+        _log.exception("upload_error")
+        notify(state, "error", "File upload failed. Check the file and try again.")
+
 
 
 def _bg_submit_job(raw_df, config):
     """
-    Runs in a background thread (via invoke_long_callback).
     Creates the Scenario, writes DataNodes, submits to Orchestrator.
-    Returns (taipy_scenario_id, job_id, submission_id) so _bg_job_done can update the card.
+    Returns (taipy_scenario_id, job_id, submission_id) for UI/state updates.
     """
     # Apply runtime MongoDB write batch size override before DataNode write.
     batch = config.get("mongo_write_batch")
@@ -4648,6 +5019,22 @@ def _bg_submit_job(raw_df, config):
     if sub_id:
         _SUBMISSION_IDS[config["job_id"]] = sub_id
     return sc.id, config["job_id"], sub_id
+
+
+def _apply_submission_result(state, result) -> None:
+    """Update UI/runtime registries after a Taipy submission succeeds."""
+    if result and isinstance(result, tuple) and len(result) >= 2:
+        taipy_sc_id, job_id = result[0], result[1]
+        sub_id = str(result[2]) if len(result) > 2 and result[2] else ""
+        if sub_id:
+            _SUBMISSION_IDS[job_id] = sub_id
+        if state.active_job_id == job_id:
+            state.job_active_submission_id = sub_id
+            state.job_submission_status = "Submitted"
+        for c in store.list_cards():
+            if getattr(c, "job_id", None) == job_id:
+                store.update_card(c.id, scenario_id=taipy_sc_id)
+    _sync_active_job_progress(state, load_results_on_done=True)
 
 
 def _sync_active_job_progress(state, load_results_on_done: bool = True) -> bool:
@@ -4759,18 +5146,7 @@ def _bg_job_done(state, status, result):
         notify(state, "error", "Job submission failed in background task.")
         return
 
-    if result and isinstance(result, tuple) and len(result) >= 2:
-        taipy_sc_id, job_id = result[0], result[1]
-        sub_id = str(result[2]) if len(result) > 2 and result[2] else ""
-        if sub_id:
-            _SUBMISSION_IDS[job_id] = sub_id
-            if state.active_job_id == job_id:
-                state.job_active_submission_id = sub_id
-                state.job_submission_status = "Submitted"
-        for c in store.list_cards():
-            if getattr(c, "job_id", None) == job_id:
-                store.update_card(c.id, scenario_id=taipy_sc_id)
-    _sync_active_job_progress(state, load_results_on_done=True)
+    _apply_submission_result(state, result)
     notify(state, "success", "Job submitted to Orchestrator.")
 
 
@@ -4805,6 +5181,10 @@ def on_submit_job(state):
     raw_bytes, _slot = resolve_upload_bytes(state, _FILE_CACHE, sid)
     if not raw_bytes:
         notify(state, "warning", "Upload a CSV or Excel file first.")
+        return
+
+    if not state.job_entities:
+        notify(state, "warning", "Select at least one entity type before running a job.")
         return
 
     fname = (_slot.get("name") or state.job_file_name or "")
@@ -4907,19 +5287,45 @@ def on_submit_job(state):
               f"{row_count:,} rows · {state.job_operator} · "
               f"{len(state.job_entities)} entity types")
 
-    invoke_long_callback(
-        state,
-        user_function=_bg_submit_job,
-        user_function_args=[raw_input_payload, config],
-        user_status_function=_bg_job_done,
-        period=_JOB_UI_POLL_MS,
-    )
+    try:
+        if not tp.is_orchestrator_running():
+            notify(state, "warning", "Taipy Orchestrator is not running — job will queue but not execute until it starts.")
+    except Exception:
+        _log.exception("Failed to check Taipy Orchestrator status")
+
+    try:
+        result = _bg_submit_job(raw_input_payload, config)
+    except Exception as exc:
+        _log.exception("job_submit_error")
+        state.job_is_running = False
+        state.job_progress_status = "error"
+        state.job_submission_status = "Failed"
+        state.job_progress_msg = f"Job submission failed: {exc}"
+        _persist_progress(
+            job_id,
+            {
+                "pct": 0.0,
+                "processed": 0,
+                "total": row_count,
+                "message": state.job_progress_msg,
+                "status": "error",
+                "updated_at": time.time(),
+            },
+        )
+        _FILE_CACHE.pop(sid, None)
+        _refresh_job_health(state)
+        _refresh_job_table(state)
+        _refresh_dashboard(state)
+        notify(state, "error", "Job submission failed.")
+        return
+
+    _apply_submission_result(state, result)
 
     # Release the upload slot — file bytes no longer needed in memory
     _FILE_CACHE.pop(sid, None)
 
     _refresh_job_table(state)
-    notify(state, "info", f"Job {job_id[:8]} submitted — "
+    notify(state, "success", f"Job {job_id[:8]} submitted — "
            f"{row_count:,} rows queued.")
 
 
@@ -4951,15 +5357,23 @@ def _load_job_results(state, jid: str):
             pass
         stats_data = sc.job_stats.read()
         anon_df    = sc.anon_output.read()
+        # Record completion telemetry
+        try:
+            record_job_completion(jid, stats_data or {})
+        except Exception:
+            pass
         state.stats_entity_rows = build_entity_stats_df(stats_data)
         if not state.stats_entity_rows.empty and go is not None:
             sdf = state.stats_entity_rows.sort_values("Count", ascending=True)
+            _st_n = len(sdf)
+            _st_b = max(0, 6 - _st_n + 1)
+            _st_colors = [mono_colorway[min(6, _st_b + i)] for i in range(_st_n)]
             fig_stats = go.Figure(
                 go.Bar(
                     x=sdf["Count"],
                     y=sdf["Entity Type"],
                     orientation="h",
-                    marker=dict(color=mono_colorway[0]),
+                    marker=dict(color=_st_colors),
                     text=[str(int(v)) for v in sdf["Count"]],
                     textposition="outside",
                     cliponaxis=False,
@@ -4984,6 +5398,11 @@ def _load_job_results(state, jid: str):
             state.download_scenario_id = jid
             state.download_rows        = len(anon_df)
             state.download_cols        = len(anon_df.columns)
+            try:
+                state.persp_html  = _build_perspective_html(anon_df)
+                state.persp_ready = True
+            except Exception:
+                state.persp_ready = False
         # Move linked card to review and create a PIISession for traceability
         for c in store.list_cards():
             if getattr(c, 'job_id', None) == jid and c.status == "in_progress":
@@ -5173,6 +5592,8 @@ def on_job_remove(state):
         state.preview_data = pd.DataFrame()
         state.stats_entity_rows = pd.DataFrame(columns=["Entity Type", "Count"])
         state.stats_entity_chart_figure = {}
+        state.persp_html  = ""
+        state.persp_ready = False
         store.log_user_action("user", "job.remove", "job", jid, "Removed completed job entities")
         _refresh_job_table(state)
         _refresh_dashboard(state)
@@ -5248,7 +5669,7 @@ def on_whatif_compare(state):
                 go.Bar(
                     x=chart_df["Scenario"],
                     y=chart_df["Entities"],
-                    marker=dict(color=mono_colorway[0]),
+                    marker=dict(color=COLOR_PRIMARY),
                     text=[str(int(v)) for v in chart_df["Entities"]],
                     textposition="outside",
                     cliponaxis=False,
@@ -5550,22 +5971,34 @@ def on_attest_open(state):
     state.attest_open = True
 
 def on_attest_confirm(state):
-    if not _require_action_role(state, "card_attest", "Compliance attestation"):
-        return
+    if getattr(state, "gui_auth_source", "unauthenticated") not in {"proxy", "break_glass"} or not getattr(state, "gui_user", ""):
+        notify(state, "error",
+               "Attestation requires an authenticated session. "
+               "Sign in via the auth proxy or enable local break-glass access before attesting."); return
+
+    _principal = principal_for(state)
+    if not authz_check(_principal, "can_attest", "card", state.attest_cid):
+        notify(state, "error",
+               "Authorization denied: you do not have the 'reviewer' or "
+               "'compliance_officer' role on this card."); return
+
     if not state.attest_by.strip():
         notify(state, "error", "Name required."); return
     card = store.get_card(state.attest_cid)
     if not card:
         notify(state, "error", "Card not found."); return
 
-    attested_by = state.attest_by.strip()
-    attested_at = _now()
+    attested_by      = state.gui_user_email or state.gui_user
+    attested_at      = _now()
     attestation_note = (state.attest_note or "").strip()
     payload = build_attestation_payload(
         card=card,
         attested_by=attested_by,
         attested_at=attested_at,
         attestation_note=attestation_note,
+        actor_sub=state.gui_user,
+        actor_name=state.gui_user,
+        actor_email=state.gui_user_email,
     )
     sig = sign_attestation_payload(payload)
     if signature_required() and not sig.signed:
@@ -5748,6 +6181,25 @@ def on_audit_clear(state):
     _refresh_audit(state)
 
 
+def on_export_audit_csv(state):
+    """Download the current audit log as a CSV file."""
+    if getattr(state, "gui_auth_source", "unauthenticated") not in {"proxy", "break_glass"} or not getattr(state, "gui_user", ""):
+        notify(state, "error",
+               "Audit export requires an authenticated session. "
+               "Sign in via the auth proxy or enable local break-glass access first."); return
+    _principal = principal_for(state)
+    if not authz_check(_principal, "can_export", "audit_log", "global"):
+        notify(state, "error",
+               "Authorization denied: 'compliance_officer' or 'admin' role required "
+               "to export the audit log."); return
+
+    df = state.audit_table
+    if isinstance(df, pd.DataFrame) and not df.empty:
+        csv_bytes = df.to_csv(index=False).encode()
+        download(state, content=csv_bytes, name="audit_log.csv")
+        notify(state, "success", f"Exported {len(df)} audit entries as CSV.")
+
+
 def on_audit_export_csv(state):
     """Export the full audit log as a CSV download."""
     if not _require_action_role(state, "audit_export", "Audit export"):
@@ -5768,6 +6220,27 @@ def on_audit_export_csv(state):
     except Exception as e:
         _log.exception("audit_export_csv_error")
         notify(state, "error", "Failed to export audit log.")
+
+
+def on_export_audit_json(state):
+    """Download the current audit log as a JSON file."""
+    if getattr(state, "gui_auth_source", "unauthenticated") not in {"proxy", "break_glass"} or not getattr(state, "gui_user", ""):
+        notify(state, "error",
+               "Audit export requires an authenticated session. "
+               "Sign in via the auth proxy or enable local break-glass access first."); return
+    _principal = principal_for(state)
+    if not authz_check(_principal, "can_export", "audit_log", "global"):
+        notify(state, "error",
+               "Authorization denied: 'compliance_officer' or 'admin' role required "
+               "to export the audit log."); return
+
+    df = state.audit_table
+    if isinstance(df, pd.DataFrame) and not df.empty:
+        import json
+        records = df.to_dict(orient="records")
+        json_bytes = json.dumps(records, indent=2, default=str).encode()
+        download(state, content=json_bytes, name="audit_log.json")
+        notify(state, "success", f"Exported {len(df)} audit entries as JSON.")
 
 
 def on_audit_export_json(state):
@@ -5834,6 +6307,7 @@ def on_pipeline_export_json(state):
         notify(state, "error", "Failed to export pipeline cards.")
 
 
+
 # ── Dashboard ────────────────────────────────────────────────────────────────
 def on_dash_filters_change(state, var_name=None, value=None):
     _refresh_dashboard(state)
@@ -5864,6 +6338,13 @@ def on_ui_demo_refresh(state):
 def on_dash_go_analyze(state):
     navigate(state, "analyze")
     _refresh_sessions(state)
+
+
+def on_logout(state, id=None, payload=None):
+    logout_url = (os.environ.get("ANON_LOGOUT_URL", "") or "").strip()
+    if not logout_url:
+        logout_url = "http://localhost:8088/oauth2/sign_out"
+    navigate(state, logout_url, tab="_self")
 
 
 def _demo_seed_fallback_entities(text: str) -> List[Dict[str, Any]]:
@@ -6092,6 +6573,7 @@ def on_dash_seed_demo(state):
     )
     try:
         store.add_session(session)
+        _invalidate_store_caches()
         store.log_user_action(
             "user",
             "session.save",
@@ -6159,6 +6641,7 @@ def run_app():
 
     use_reloader = _env_flag("ANON_GUI_USE_RELOADER", "TAIPY_USE_RELOADER", default=False)
     debug_mode = _env_flag("ANON_GUI_DEBUG", "TAIPY_DEBUG", default=False)
+    allow_unsafe_werkzeug = _env_flag("ANON_GUI_ALLOW_UNSAFE_WERKZEUG", default=True)
     _start_live_dashboard_thread(gui)
     try:
         APP_CTX.event_processor = EventProcessor(gui)
@@ -6189,7 +6672,25 @@ def run_app():
             data_url_max_size=50 * 1024 * 1024,
             use_reloader=use_reloader,
             debug=debug_mode,
+            allow_unsafe_werkzeug=allow_unsafe_werkzeug,
+            # Increase the max_decode_packets to handle large state with many dataframes
+            async_mode="threading",
+            engineio_logger=False,
+            flask_cors=True,
         )
+        
+        # Patch engineio to increase packet limit before starting server
+        try:
+            import engineio
+            # Monkey-patch the Server class to use higher limit
+            _original_init = engineio.Server.__init__
+            def _patched_init(self, *args, **kwargs):
+                kwargs.setdefault('max_decode_packets', 100)
+                return _original_init(self, *args, **kwargs)
+            engineio.Server.__init__ = _patched_init
+        except Exception as e:
+            _log.warning("Could not patch engineio packet limit: %s", e)
+        
         if taipy_host:
             run_kwargs["host"] = taipy_host
         if taipy_port:

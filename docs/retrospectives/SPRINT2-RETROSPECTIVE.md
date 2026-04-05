@@ -1,10 +1,12 @@
 ## Sprint 2 Retrospective
 
+
 **Team Name:** Group 3 - Anonymous Studio
 
 **Sprint Number:** 2
 
 **Date Range:** 2/23/26 - 3/8/26
+
 
 **Team Members:** Carley Fant, Diamond Hogans, Sakshi Patel, Elijah Jenkins
 
@@ -13,6 +15,7 @@
 ## Sprint Summary
 
 This sprint focused on a **full rewrite of Anonymous Studio** from the Streamlit PoC (v1) to a production-grade Taipy GUI + taipy.core platform (v2). The team aimed to achieve complete feature parity with v1 while adding new capabilities: background batch job execution, a multi-backend persistence layer (Memory / MongoDB / DuckDB), a Kanban pipeline, a compliance audit trail, Ed25519 attestation, a REST API with Auth0 JWT, Prometheus telemetry, and an appointment scheduler. Eight out of nine planned pipeline cards were delivered, with the encrypt operator (card-007) carrying forward due to a missing UI key-input field. The sprint was also impacted by an early repository archiving incident that required a story recovery effort to reconstruct pipeline card definitions and re-implement the lost export functionality (card-011). Despite these setbacks, the sprint closed at 95.8% feature completion with 239 tests across 14 test files. As in Sprint 1, contribution imbalance remained a challenge — most direct commits came from one team member, with heavy use of GitHub Copilot coding agent to accelerate delivery.
+
 
 ---
 
@@ -55,6 +58,7 @@ Several tasks were added mid-sprint that were not in the original plan:
 
 Going forward, we will account for repository maintenance and recovery overhead when planning sprint capacity.
 
+
 ---
 
 ## Sprint Planning vs. Reality
@@ -74,6 +78,7 @@ The sprint also consumed significant capacity on unplanned recovery work (reposi
 Based on GitHub contributor data for this sprint:
 
 - Carley Fant: 4 direct commits + primary driver of ~27 GitHub Copilot coding-agent PRs
+
 - Diamond Hogans: 0 commits
 - Sakshi Patel: 0 commits
 - Elijah Jenkins: 0 commits
@@ -83,6 +88,7 @@ Based on GitHub contributor data for this sprint:
 ### Task Scoping
 
 The nine pipeline card stories were appropriately sized. The broader platform rewrite was ambitious for a two-week sprint — the team relied heavily on the Copilot agent to close the gap. Future sprints should scope more conservatively (6–7 stories) to leave room for review, testing, and documentation.
+
 
 ---
 
@@ -94,6 +100,7 @@ The nine pipeline card stories were appropriately sized. The broader platform re
 4. **Strong test coverage** — 239 tests across 14 test files with dedicated coverage for every major subsystem. `mongomock` made MongoDB tests fast and isolated without requiring a live database.
 5. **Export functionality recovered and delivered** — card-011 was reconstructed and fully re-implemented after the archiving incident. Four export callbacks with UI buttons and 7 tests were delivered before sprint close.
 
+
 ---
 
 ## What Didn't Go Well
@@ -103,6 +110,7 @@ The nine pipeline card stories were appropriately sized. The broader platform re
 3. **Encrypt operator left incomplete (card-007)** — The Presidio `encrypt` backend is fully supported, but the UI key-input field and `OperatorConfig("encrypt", {"key": key})` wiring were not implemented. The story was partially started and carried forward without a clear handoff.
 4. **Issue tracking not kept up to date** — Several features that were fully implemented (detection rationale, REST API, batch jobs) were never closed as GitHub issues. The project board did not accurately reflect sprint status throughout the sprint.
 5. **Sprint capacity underestimated** — The unplanned work (archiving recovery, DuckDB backend, audit trail bug fix, dependency updates) consumed roughly 20% of sprint capacity that was not budgeted in the plan.
+
 
 ---
 
@@ -121,6 +129,7 @@ The nine pipeline card stories were appropriately sized. The broader platform re
    - Assigned to: Carley Fant (facilitate), All (participate)
    - Agree on 6–7 stories for Sprint 3 before the sprint begins; do not add scope mid-sprint without removing something else
 
+
 ---
 
 ## Individual Reflections
@@ -137,10 +146,12 @@ This sprint I drove the full platform rewrite from Streamlit to Taipy, set up th
 **Elijah Jenkins:**
 \[Please add 2-4 sentences about your contribution this sprint and one thing you want to improve next sprint\]
 
+
 ---
 
 ## Contribution Transparency Note
 
 Per the assignment guidelines, we are documenting that three team members (Diamond Hogans, Sakshi Patel, and Elijah Jenkins) made no direct code contributions to the repository this sprint. This is a continuation of the imbalance identified in the Sprint 1 retro. The team is addressing this through the action items above for Sprint 3, specifically the requirement for each team member to merge at least one PR.
+
 
 Commit history: [View on GitHub](https://github.com/cpsc4205-group3/anonymous-studio/commits/main)

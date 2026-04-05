@@ -1,0 +1,71 @@
+model
+  schema 1.1
+
+##
+## Anonymous Studio — OpenFGA Authorization Model
+##
+## Resource types
+##   card        — pipeline review card (one per data asset under review)
+##   audit_log   — the system-wide audit trail (singleton: audit_log:global)
+##   session     — a de-identification run
+##   job         — a batch anonymization job
+##   attestation — an attested record on a card (child of card)
+##
+## Roles (assigned as direct relations on a resource)
+##   analyst            — read-only, can submit jobs and view sessions
+##   reviewer           — can attest cards
+##   compliance_officer — can attest + export audit log
+##   admin              — superset of all roles
+##
+## Phase-1 enforced actions (all others are un-gated pending Phase 2)
+##   card:can_attest       → reviewer | compliance_officer | admin
+##   audit_log:can_export  → compliance_officer | admin
+##
+
+type user
+
+## Groups allow role assignment at group granularity.
+## Tuple: group:analysts#member@user:alice — makes alice a group member.
+type group
+  relations
+    define member: [user]
+
+## ── card ───────────────────────────────────────────────────────────────────────
+type card
+  relations
+    define analyst:            [user, group#member]
+    define reviewer:           [user, group#member]
+    define compliance_officer: [user, group#member]
+    define admin:              [user, group#member] or compliance_officer
+    define can_view:           analyst or reviewer or compliance_officer or admin
+    define can_attest:         reviewer or compliance_officer or admin
+
+## ── audit_log ─────────────────────────────────────────────────────────────────
+## Singleton resource — use object id "global".
+type audit_log
+  relations
+    define compliance_officer: [user, group#member]
+    define admin:              [user, group#member] or compliance_officer
+    define can_export:         compliance_officer or admin
+
+## ── session ───────────────────────────────────────────────────────────────────
+type session
+  relations
+    define analyst: [user, group#member]
+    define admin:   [user, group#member]
+    define can_view: analyst or admin
+
+## ── job ───────────────────────────────────────────────────────────────────────
+type job
+  relations
+    define analyst:  [user, group#member]
+    define admin:    [user, group#member]
+    define can_submit: analyst or admin
+
+## ── attestation ───────────────────────────────────────────────────────────────
+type attestation
+  relations
+    define reviewer:           [user, group#member]
+    define compliance_officer: [user, group#member]
+    define admin:              [user, group#member] or compliance_officer
+    define can_create:         reviewer or compliance_officer or admin

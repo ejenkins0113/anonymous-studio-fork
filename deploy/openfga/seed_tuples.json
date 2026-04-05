@@ -1,0 +1,11 @@
+{
+  "tuple_keys": [
+    {"user": "user:alice@example.com",  "relation": "reviewer",           "object": "card:demo-card-001"},
+    {"user": "user:alice@example.com",  "relation": "reviewer",           "object": "card:demo-card-002"},
+    {"user": "user:charlie@example.com","relation": "compliance_officer",  "object": "card:demo-card-001"},
+    {"user": "user:charlie@example.com","relation": "compliance_officer",  "object": "audit_log:global"},
+    {"user": "user:bob@example.com",    "relation": "analyst",            "object": "card:demo-card-001"},
+    {"user": "user:admin@example.com",  "relation": "admin",              "object": "card:demo-card-001"},
+    {"user": "user:admin@example.com",  "relation": "admin",              "object": "audit_log:global"}
+  ]
+}

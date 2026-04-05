@@ -89,6 +89,41 @@ def test_on_download_exports_csv_and_cleans_job_registry(monkeypatch):
     assert "job-123" not in app.PROGRESS_REGISTRY
 
 
+def test_run_app_allows_unsafe_werkzeug_by_default(monkeypatch):
+    captured = {}
+
+    class _DummyEventProcessor:
+        def __init__(self, _gui):
+            pass
+
+        def broadcast_on_event(self, callback):
+            captured["event_callback"] = callback
+
+        def start(self):
+            captured["event_started"] = True
+
+        def stop(self):
+            captured["event_stopped"] = True
+
+    class _DummyOrchestrator:
+        def stop(self, wait=False):
+            captured["orchestrator_stop_wait"] = wait
+
+    monkeypatch.delenv("ANON_GUI_ALLOW_UNSAFE_WERKZEUG", raising=False)
+    monkeypatch.setattr(app, "_start_live_dashboard_thread", lambda _gui: None)
+    monkeypatch.setattr(app, "_stop_live_dashboard_thread", lambda: None)
+    monkeypatch.setattr(app, "EventProcessor", _DummyEventProcessor)
+    monkeypatch.setattr(app.tp, "Orchestrator", _DummyOrchestrator)
+    monkeypatch.setattr(app.tp, "run", lambda _gui, _orch, **kwargs: captured.setdefault("run_kwargs", kwargs))
+
+    app.run_app()
+
+    assert captured["run_kwargs"]["allow_unsafe_werkzeug"] is True
+    assert captured["orchestrator_stop_wait"] is False
+    assert captured["event_started"] is True
+    assert captured["event_stopped"] is True
+
+
 def test_build_geo_place_counts_maps_text_and_entities():
     sessions = [
         SimpleNamespace(
@@ -150,13 +185,16 @@ def test_on_submit_job_csv_uses_staged_path_payload(monkeypatch, tmp_path):
     monkeypatch.setattr(app, "notify", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(app, "_persist_progress", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(app, "_refresh_job_table", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app, "_refresh_dashboard", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app, "_sync_active_job_progress", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(app.store, "log_user_action", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app.store, "list_cards", lambda: [])
 
-    def fake_invoke_long_callback(_state, user_function, user_function_args, user_status_function, period):
-        captured["args"] = user_function_args
-        captured["period"] = period
+    def fake_bg_submit_job(raw_payload, config):
+        captured["args"] = [raw_payload, config]
+        return ("sc-1", "jobcsv123456", "sub-1")
 
-    monkeypatch.setattr(app, "invoke_long_callback", fake_invoke_long_callback)
+    monkeypatch.setattr(app, "_bg_submit_job", fake_bg_submit_job)
     monkeypatch.setattr(app, "new_job_id", lambda: "jobcsv123456")
 
     app._FILE_CACHE["state-csv"] = {"bytes": csv_bytes, "name": "upload.csv"}
@@ -171,6 +209,53 @@ def test_on_submit_job_csv_uses_staged_path_payload(monkeypatch, tmp_path):
     assert int(config.get("row_count_hint", 0)) >= 2
     assert os.path.exists(config["input_csv_path"])
     os.remove(config["input_csv_path"])
+
+
+def test_on_submit_job_marks_error_when_submission_raises(monkeypatch):
+    csv_bytes = b"text\nAlice Seattle\n"
+    state = SimpleNamespace(
+        job_file_content="upload.csv",
+        job_file_name="upload.csv",
+        job_operator="replace",
+        job_entities=["PERSON"],
+        job_threshold=0.35,
+        job_chunk_size=500,
+        job_spacy_model="auto",
+        job_card_id="",
+        job_quality_md="",
+        active_job_id="",
+        job_is_running=False,
+        job_active_submission_id="",
+        job_submission_status="",
+        job_progress_pct=0.0,
+        job_progress_msg="",
+        job_progress_status="",
+        job_expected_rows=0,
+        job_active_started=0.0,
+        job_view_tab="Results",
+    )
+
+    captured_notify = []
+    captured_progress = {}
+    monkeypatch.setattr(app, "get_state_id", lambda _state: "state-submit-fail")
+    monkeypatch.setattr(app, "notify", lambda _state, level, msg: captured_notify.append((level, msg)))
+    monkeypatch.setattr(app, "_refresh_job_table", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app, "_refresh_dashboard", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app, "_refresh_job_health", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app, "_persist_progress", lambda job_id, payload: captured_progress.setdefault(job_id, payload))
+    monkeypatch.setattr(app.store, "log_user_action", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app, "new_job_id", lambda: "jobfail123456")
+    monkeypatch.setattr(app, "_bg_submit_job", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    app._FILE_CACHE["state-submit-fail"] = {"bytes": csv_bytes, "name": "upload.csv"}
+
+    app.on_submit_job(state)
+
+    assert state.job_is_running is False
+    assert state.job_submission_status == "Failed"
+    assert state.job_progress_status == "error"
+    assert "jobfail123456" in captured_progress
+    assert captured_notify and captured_notify[-1] == ("error", "Job submission failed.")
 
 
 def test_sync_active_job_progress_keeps_error_when_taipy_reports_done(monkeypatch):
@@ -385,3 +470,95 @@ def test_playground_store_data_returns_real_data(monkeypatch):
     assert sd["funnel_counts"][0] == 1   # backlog
     assert sd["funnel_counts"][3] == 2   # done
     assert "SpacyRecognizer" in sd["recog_entity"]
+
+def test_on_export_audit_csv_downloads_csv_file(monkeypatch):
+    """Test that on_export_audit_csv downloads the audit table as CSV."""
+    audit_df = pd.DataFrame([
+        {"Time": "12:00:00", "Actor": "user1", "Action": "login", "Resource": "auth/session", "Details": "Logged in", "Severity": "info"},
+        {"Time": "12:05:00", "Actor": "user2", "Action": "create", "Resource": "pipeline/card-1", "Details": "Created card", "Severity": "info"},
+    ])
+    state = SimpleNamespace(
+        audit_table=audit_df,
+        gui_auth_source="proxy",
+        gui_user="admin",
+        gui_user_email="admin@example.com",
+    )
+    captured = {}
+
+    monkeypatch.setattr(app, "download", lambda _state, content, name: captured.update({"content": content, "name": name}))
+    monkeypatch.setattr(app.store, "log_user_action", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "notify", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "authz_check", lambda *args, **kwargs: True)
+
+    app.on_export_audit_csv(state)
+
+    assert captured["name"] == "audit_log.csv"
+    assert b"Time,Actor,Action,Resource,Details,Severity" in captured["content"]
+    assert b"user1" in captured["content"]
+    assert b"user2" in captured["content"]
+
+
+def test_on_export_audit_csv_warns_on_empty_table(monkeypatch):
+    """Test that exporting an empty audit table shows a warning."""
+    state = SimpleNamespace(
+        audit_table=pd.DataFrame(),
+        gui_auth_source="proxy",
+        gui_user="admin",
+        gui_user_email="admin@example.com",
+    )
+    captured_notify = []
+
+    monkeypatch.setattr(app, "download", lambda _state, content, name: None)
+    monkeypatch.setattr(app, "notify", lambda _state, level, msg: captured_notify.append((level, msg)))
+    monkeypatch.setattr(app, "authz_check", lambda *args, **kwargs: True)
+
+    app.on_export_audit_csv(state)
+
+    assert captured_notify and captured_notify[-1][0] == "error"
+
+
+def test_on_export_audit_json_downloads_json_file(monkeypatch):
+    """Test that on_export_audit_json downloads the audit table as JSON."""
+    import json
+    audit_df = pd.DataFrame([
+        {"Time": "12:00:00", "Actor": "admin", "Action": "delete", "Resource": "card/123", "Details": "Deleted card", "Severity": "warning"},
+    ])
+    state = SimpleNamespace(
+        audit_table=audit_df,
+        gui_auth_source="proxy",
+        gui_user="admin",
+        gui_user_email="admin@example.com",
+    )
+    captured = {}
+
+    monkeypatch.setattr(app, "download", lambda _state, content, name: captured.update({"content": content, "name": name}))
+    monkeypatch.setattr(app.store, "log_user_action", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "notify", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "authz_check", lambda *args, **kwargs: True)
+
+    app.on_export_audit_json(state)
+
+    assert captured["name"] == "audit_log.json"
+    data = json.loads(captured["content"].decode())
+    assert len(data) == 1
+    assert data[0]["Actor"] == "admin"
+    assert data[0]["Action"] == "delete"
+
+
+def test_on_export_audit_json_warns_on_empty_table(monkeypatch):
+    """Test that exporting an empty audit table as JSON shows a warning."""
+    state = SimpleNamespace(
+        audit_table=pd.DataFrame(),
+        gui_auth_source="proxy",
+        gui_user="admin",
+        gui_user_email="admin@example.com",
+    )
+    captured_notify = []
+
+    monkeypatch.setattr(app, "download", lambda _state, content, name: None)
+    monkeypatch.setattr(app, "notify", lambda _state, level, msg: captured_notify.append((level, msg)))
+    monkeypatch.setattr(app, "authz_check", lambda *args, **kwargs: True)
+
+    app.on_export_audit_json(state)
+
+    assert captured_notify and captured_notify[-1] == ("warning", "No audit entries to export.")

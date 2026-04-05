@@ -148,6 +148,7 @@ class MongoStore(StoreBase):
         self._cards.create_index([("status", ASCENDING), ("updated_at", DESCENDING)])
         self._appts.create_index([("scheduled_for", ASCENDING), ("status", ASCENDING)])
         self._audit.create_index([("resource_id", ASCENDING), ("timestamp", DESCENDING)])
+        self._audit.create_index([("timestamp", DESCENDING)])  # time-window scans
         self._sessions.create_index([("created_at", DESCENDING)])
         self._users.create_index([("email", ASCENDING)], unique=True)
 
@@ -175,8 +176,8 @@ class MongoStore(StoreBase):
         doc = self._sessions.find_one({"_id": session_id})
         return _from_doc(PIISession, doc) if doc else None
 
-    def list_sessions(self, limit: int = 100) -> List[PIISession]:
-        cursor = self._sessions.find().sort("created_at", DESCENDING).limit(limit)
+    def list_sessions(self) -> List[PIISession]:
+        cursor = self._sessions.find().sort("created_at", DESCENDING)
         return [_from_doc(PIISession, d) for d in cursor]
 
     def list_sessions_by_card(self, card_id: str) -> List[PIISession]:

@@ -15,6 +15,8 @@ def _make_state():
         audit_search="",
         audit_sev="all",
         audit_table=pd.DataFrame(),
+        is_authenticated=True,
+        current_user_role="Admin",
     )
 
 

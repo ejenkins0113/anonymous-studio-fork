@@ -43,7 +43,15 @@ def resolve_upload_bytes(state: Any, file_cache: Dict[str, Dict[str, Any]], stat
         return fc, slot
 
     if isinstance(fc, str) and fc and os.path.exists(fc):
-        with open(fc, "rb") as uploaded:
+        _fc_real = os.path.realpath(fc)
+        _allowed_roots = tuple({
+            os.path.realpath(tempfile.gettempdir()),
+            os.path.realpath(os.environ.get("ANON_UPLOAD_DIR", tempfile.gettempdir())),
+        })
+        if not any(_fc_real.startswith(r + os.sep) or _fc_real == r for r in _allowed_roots):
+            _log.warning("Rejecting file path outside allowed upload roots: %s", fc)
+            return None, slot
+        with open(_fc_real, "rb") as uploaded:
             raw_bytes = uploaded.read()
         slot = {"bytes": raw_bytes, "name": os.path.basename(fc)}
         file_cache[state_id] = slot
@@ -59,7 +67,8 @@ def stage_csv_upload_for_job(job_id: str, file_name: str, raw_bytes: bytes) -> s
         os.environ.get("ANON_UPLOAD_DIR", tempfile.gettempdir()),
         "anon_studio_uploads",
     )
-    os.makedirs(root, exist_ok=True)
+    os.makedirs(root, mode=0o700, exist_ok=True)
+
     path = os.path.join(root, f"{job_id}_{safe_name}")
     with open(path, "wb") as out:
         out.write(raw_bytes)
@@ -91,7 +100,7 @@ def parse_upload_to_df(raw_bytes: bytes, file_name: str) -> pd.DataFrame:
 
     if lowered.endswith(".csv"):
         # CSV must be plain text — reject if it starts with a known binary magic signature.
-        if header[:4] in (_XLSX_MAGIC, _XLS_MAGIC) or header[:4] == b"PK\x03\x04":
+        if header[:4] in (_XLSX_MAGIC, _XLS_MAGIC):
             raise ValueError(
                 "File extension is .csv but the content looks like a binary (Excel) file. "
                 "Save the file as CSV first."

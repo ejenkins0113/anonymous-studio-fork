@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from typing import Optional
@@ -20,7 +21,7 @@ class SyntheticConfig:
     api_key: str = ""
     api_base: str = ""
     deployment_id: str = ""
-    api_version: str = "2024-08-01-preview"
+    api_version: str = os.environ.get("ANON_SYNTH_API_VERSION", "2024-08-01-preview")
     temperature: float = 0.2
     max_tokens: int = 800
 

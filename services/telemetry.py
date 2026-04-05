@@ -30,6 +30,9 @@ Public API
     register_telemetry(event_processor)  -> None
     start_metrics_server(port)           -> None
     record_job_completion(job_id, stats) -> None   # called from tasks.py / bg thread
+    get_telemetry_snapshot()             -> dict   # in-process counters (no prom needed)
+    get_recent_events(limit)             -> list   # last N captured Taipy events
+    clear_telemetry()                    -> None   # reset counters (tests only)
 """
 from __future__ import annotations
 
@@ -98,11 +101,41 @@ _job_start_lock = Lock()
 # ── Guard: only register once ──────────────────────────────────────────────────
 _registered = False
 
+# ── In-process telemetry state (always available, no prometheus_client needed) ──
+_TELEMETRY_LOCK = Lock()
+_TELEMETRY_STATE: Dict[str, Any] = {
+    "jobs_created":        0,
+    "jobs_running":        0,
+    "jobs_completed":      0,
+    "jobs_failed":         0,
+    "jobs_canceled":       0,
+    "scenarios_created":   0,
+    "entities_detected":   0,
+    "rows_processed":      0,
+    "durations_s":         [],   # list[float] — wall-clock seconds per completed job
+}
+_RECENT_EVENTS: list = []        # list[dict] — last _MAX_EVENTS entries
+_MAX_EVENTS = 200
+
+
+def _record_event(entity_type: str, operation: str, attr_name: str, attr_value: str, entity_id: str) -> None:
+    """Append an event to the recent-events ring buffer."""
+    entry = {
+        "ts":          time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "entity_type": entity_type,
+        "operation":   operation,
+        "attribute":   attr_name,
+        "value":       attr_value,
+        "entity_id":   entity_id[:16] if entity_id else "",
+    }
+    with _TELEMETRY_LOCK:
+        _RECENT_EVENTS.append(entry)
+        if len(_RECENT_EVENTS) > _MAX_EVENTS:
+            del _RECENT_EVENTS[: len(_RECENT_EVENTS) - _MAX_EVENTS]
+
 
 def _on_telemetry_event(event: Any) -> None:
     """Server-side Taipy event callback (no GUI state)."""
-    if not _PROM_AVAILABLE:
-        return
     try:
         entity_type = str(getattr(event, "entity_type", ""))
         operation   = str(getattr(event, "operation",   ""))
@@ -112,34 +145,65 @@ def _on_telemetry_event(event: Any) -> None:
 
         # ── Job created ───────────────────────────────────────────────────────
         if "JOB" in entity_type and "CREATION" in operation:
-            _JOBS_CREATED.inc()
+            if _PROM_AVAILABLE:
+                _JOBS_CREATED.inc()
+            with _TELEMETRY_LOCK:
+                _TELEMETRY_STATE["jobs_created"] += 1
             with _job_start_lock:
                 _job_start[entity_id] = time.monotonic()
+            _record_event(entity_type, operation, attr_name, attr_value, entity_id)
             return
 
         # ── Job status update ─────────────────────────────────────────────────
         if "JOB" in entity_type and "UPDATE" in operation and attr_name == "status":
             status_upper = attr_value.upper()
-            _JOBS_STATUS.labels(status=status_upper).inc()
-            _QUEUE_DEPTH.labels(status=status_upper).inc()
+            if _PROM_AVAILABLE:
+                _JOBS_STATUS.labels(status=status_upper).inc()
+                _QUEUE_DEPTH.labels(status=status_upper).inc()
 
             terminal = {"COMPLETED", "FAILED", "CANCELED", "SKIPPED", "ABANDONED"}
+            duration: Optional[float] = None
             if any(t in status_upper for t in terminal):
-                # Decrement queue depth for running/pending when terminal
-                _QUEUE_DEPTH.labels(status="RUNNING").dec()
-                _QUEUE_DEPTH.labels(status="PENDING").dec()
-                # Record duration
+                if _PROM_AVAILABLE:
+                    _QUEUE_DEPTH.labels(status="RUNNING").dec()
+                    _QUEUE_DEPTH.labels(status="PENDING").dec()
                 with _job_start_lock:
                     start = _job_start.pop(entity_id, None)
                 if start is not None:
-                    _JOB_DURATION.observe(time.monotonic() - start)
+                    duration = time.monotonic() - start
+                    if _PROM_AVAILABLE:
+                        _JOB_DURATION.observe(duration)
+
+                with _TELEMETRY_LOCK:
+                    if "COMPLETED" in status_upper or "SKIPPED" in status_upper:
+                        _TELEMETRY_STATE["jobs_completed"] += 1
+                        _TELEMETRY_STATE["jobs_running"] = max(0, _TELEMETRY_STATE["jobs_running"] - 1)
+                    elif "FAILED" in status_upper or "ABANDONED" in status_upper:
+                        _TELEMETRY_STATE["jobs_failed"] += 1
+                        _TELEMETRY_STATE["jobs_running"] = max(0, _TELEMETRY_STATE["jobs_running"] - 1)
+                    elif "CANCELED" in status_upper:
+                        _TELEMETRY_STATE["jobs_canceled"] += 1
+                        _TELEMETRY_STATE["jobs_running"] = max(0, _TELEMETRY_STATE["jobs_running"] - 1)
+                    if duration is not None:
+                        _TELEMETRY_STATE["durations_s"].append(round(duration, 2))
+                        if len(_TELEMETRY_STATE["durations_s"]) > 1000:
+                            _TELEMETRY_STATE["durations_s"] = _TELEMETRY_STATE["durations_s"][-1000:]
             elif "RUNNING" in status_upper:
-                _QUEUE_DEPTH.labels(status="PENDING").dec()
+                if _PROM_AVAILABLE:
+                    _QUEUE_DEPTH.labels(status="PENDING").dec()
+                with _TELEMETRY_LOCK:
+                    _TELEMETRY_STATE["jobs_running"] += 1
+
+            _record_event(entity_type, operation, attr_name, attr_value, entity_id)
             return
 
         # ── Scenario created ──────────────────────────────────────────────────
         if "SCENARIO" in entity_type and "CREATION" in operation:
-            _SCENARIOS_CREATED.inc()
+            if _PROM_AVAILABLE:
+                _SCENARIOS_CREATED.inc()
+            with _TELEMETRY_LOCK:
+                _TELEMETRY_STATE["scenarios_created"] += 1
+            _record_event(entity_type, operation, attr_name, attr_value, entity_id)
             return
 
     except Exception:  # telemetry must never crash the app
@@ -161,17 +225,74 @@ def record_job_completion(job_id: str, stats: Optional[Dict[str, Any]]) -> None:
         The ``job_stats`` dict produced by ``run_pii_anonymization``.
         Expected keys: ``total_entities`` (int), ``processed_rows`` (int).
     """
-    if not _PROM_AVAILABLE or not stats:
+    if not stats:
         return
     try:
         entities = int(stats.get("total_entities", 0) or 0)
         rows     = int(stats.get("processed_rows",  0) or 0)
-        if entities > 0:
-            _ENTITIES_DETECTED.inc(entities)
-        if rows > 0:
-            _ROWS_PROCESSED.inc(rows)
+        if _PROM_AVAILABLE:
+            if entities > 0:
+                _ENTITIES_DETECTED.inc(entities)
+            if rows > 0:
+                _ROWS_PROCESSED.inc(rows)
+        with _TELEMETRY_LOCK:
+            if entities > 0:
+                _TELEMETRY_STATE["entities_detected"] += entities
+            if rows > 0:
+                _TELEMETRY_STATE["rows_processed"] += rows
     except Exception:
         pass
+
+
+def get_telemetry_snapshot() -> Dict[str, Any]:
+    """Return a point-in-time copy of the in-process telemetry counters.
+
+    Always available — does not require prometheus_client.
+
+    Returns
+    -------
+    dict with keys:
+        jobs_created, jobs_running, jobs_completed, jobs_failed, jobs_canceled,
+        scenarios_created, entities_detected, rows_processed,
+        duration_avg_s, duration_p95_s, duration_count,
+        prometheus_available, metrics_port
+    """
+    import os
+    with _TELEMETRY_LOCK:
+        state = dict(_TELEMETRY_STATE)
+        durations = list(state.pop("durations_s", []))
+
+    duration_avg: Optional[float] = None
+    duration_p95: Optional[float] = None
+    if durations:
+        durations_sorted = sorted(durations)
+        duration_avg = round(sum(durations_sorted) / len(durations_sorted), 2)
+        p95_idx = max(0, int(len(durations_sorted) * 0.95) - 1)
+        duration_p95 = durations_sorted[p95_idx]
+
+    metrics_port = int(os.environ.get("ANON_METRICS_PORT", "0") or "0")
+    return {
+        **state,
+        "duration_avg_s":   duration_avg,
+        "duration_p95_s":   duration_p95,
+        "duration_count":   len(durations),
+        "prometheus_available": _PROM_AVAILABLE,
+        "metrics_port":     metrics_port,
+    }
+
+
+def get_recent_events(limit: int = 100) -> list:
+    """Return the most recent *limit* Taipy events as a list of dicts."""
+    with _TELEMETRY_LOCK:
+        return list(_RECENT_EVENTS[-limit:])
+
+
+def clear_telemetry() -> None:
+    """Reset all in-process counters and event log. Useful for testing."""
+    with _TELEMETRY_LOCK:
+        for k in list(_TELEMETRY_STATE.keys()):
+            _TELEMETRY_STATE[k] = [] if isinstance(_TELEMETRY_STATE[k], list) else 0
+        _RECENT_EVENTS.clear()
 
 
 def register_telemetry(event_processor: Any) -> None:

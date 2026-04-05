@@ -23,13 +23,19 @@ in unit tests for a clean, predictable state.
 """
 from __future__ import annotations
 
+import threading
 from typing import Any, Dict, List, Optional
+
+import logging
 
 from store.base import StoreBase
 from store.models import (
     _now, _uid,
     PIISession, PipelineCard, Appointment, AuditEntry, UserAccount,
 )
+
+_log = logging.getLogger(__name__)
+_VALID_CARD_STATUSES = frozenset({"backlog", "in_progress", "review", "done"})
 
 
 class MemoryStore(StoreBase):
@@ -41,6 +47,10 @@ class MemoryStore(StoreBase):
         self._cards: Dict[str, PipelineCard] = {}
         self._appointments: Dict[str, Appointment] = {}
         self._audit: List[AuditEntry] = []
+        # RLock: the scheduler daemon writes from its own thread concurrently with
+        # Taipy GUI callback threads. Reentrant so _log -> dict writes on the same
+        # thread don't deadlock.
+        self._lock = threading.RLock()
         if seed:
             self._seed_demo_data()
 
@@ -55,19 +65,21 @@ class MemoryStore(StoreBase):
         details: str = "",
         severity: str = "info",
     ) -> None:
-        self._audit.append(AuditEntry(
-            actor=actor,
-            action=action,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            details=details,
-            severity=severity,
-        ))
+        with self._lock:
+            self._audit.append(AuditEntry(
+                actor=actor,
+                action=action,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                details=details,
+                severity=severity,
+            ))
 
     # ── Sessions ──────────────────────────────────────────────────────────────
 
     def add_session(self, session: PIISession) -> PIISession:
-        self._sessions[session.id] = session
+        with self._lock:
+            self._sessions[session.id] = session
         self._log(
             "system", "pii.anonymize", "session", session.id,
             f"Anonymized {len(session.entities)} entities using '{session.operator}'",
@@ -129,9 +141,10 @@ class MemoryStore(StoreBase):
     # ── Pipeline Cards ─────────────────────────────────────────────────────────
 
     def add_card(self, card: PipelineCard) -> PipelineCard:
-        if card.status == "done" and not card.done_at:
-            card.done_at = card.updated_at or _now()
-        self._cards[card.id] = card
+        with self._lock:
+            if card.status == "done" and not card.done_at:
+                card.done_at = card.updated_at or _now()
+            self._cards[card.id] = card
         self._log(
             "system", "pipeline.create", "card", card.id,
             f"Created card '{card.title}' in '{card.status}'",
@@ -139,21 +152,22 @@ class MemoryStore(StoreBase):
         return card
 
     def update_card(self, card_id: str, **kwargs) -> Optional[PipelineCard]:
-        card = self._cards.get(card_id)
-        if not card:
-            return None
-        old_status = card.status
-        now_ts = _now()
-        if "status" in kwargs:
-            new_status = kwargs.get("status")
-            if new_status == "done" and old_status != "done":
-                kwargs["done_at"] = kwargs.get("done_at") or now_ts
-            elif old_status == "done" and new_status != "done":
-                kwargs["done_at"] = None
-        for k, v in kwargs.items():
-            if hasattr(card, k):
-                setattr(card, k, v)
-        card.updated_at = now_ts
+        with self._lock:
+            card = self._cards.get(card_id)
+            if not card:
+                return None
+            old_status = card.status
+            now_ts = _now()
+            if "status" in kwargs:
+                new_status = kwargs.get("status")
+                if new_status == "done" and old_status != "done":
+                    kwargs["done_at"] = kwargs.get("done_at") or now_ts
+                elif old_status == "done" and new_status != "done":
+                    kwargs["done_at"] = None
+            for k, v in kwargs.items():
+                if hasattr(card, k):
+                    setattr(card, k, v)
+            card.updated_at = now_ts
         if "status" in kwargs and kwargs["status"] != old_status:
             self._log(
                 "system", "pipeline.move", "card", card_id,
@@ -170,15 +184,16 @@ class MemoryStore(StoreBase):
         return card
 
     def delete_card(self, card_id: str) -> bool:
-        if card_id in self._cards:
+        with self._lock:
+            if card_id not in self._cards:
+                return False
             title = self._cards[card_id].title
             del self._cards[card_id]
-            self._log(
-                "system", "pipeline.delete", "card", card_id,
-                f"Deleted '{title}'", severity="warning",
-            )
-            return True
-        return False
+        self._log(
+            "system", "pipeline.delete", "card", card_id,
+            f"Deleted '{title}'", severity="warning",
+        )
+        return True
 
     def get_card(self, card_id: str) -> Optional[PipelineCard]:
         return self._cards.get(card_id)
@@ -194,13 +209,17 @@ class MemoryStore(StoreBase):
             "backlog": [], "in_progress": [], "review": [], "done": [],
         }
         for card in self._cards.values():
+            if card.status not in _VALID_CARD_STATUSES:
+                _log.warning("card %s has invalid status %r — skipping", card.id, card.status)
+                continue
             result.setdefault(card.status, []).append(card)
         return result
 
     # ── Appointments ───────────────────────────────────────────────────────────
 
     def add_appointment(self, appt: Appointment) -> Appointment:
-        self._appointments[appt.id] = appt
+        with self._lock:
+            self._appointments[appt.id] = appt
         self._log(
             "system", "schedule.create", "appointment", appt.id,
             f"Scheduled '{appt.title}' for {appt.scheduled_for}",
@@ -212,12 +231,14 @@ class MemoryStore(StoreBase):
         return self._appointments.get(appt_id)
 
     def update_appointment(self, appt_id: str, **kwargs) -> Optional[Appointment]:
-        appt = self._appointments.get(appt_id)
-        if not appt:
-            return None
-        for k, v in kwargs.items():
-            if hasattr(appt, k):
-                setattr(appt, k, v)
+        with self._lock:
+            appt = self._appointments.get(appt_id)
+            if not appt:
+                return None
+            for k, v in kwargs.items():
+                if hasattr(appt, k):
+                    setattr(appt, k, v)
+            appt.updated_at = _now()
         self._log(
             "system", "schedule.update", "appointment", appt_id,
             f"Updated '{appt.title}': {', '.join(kwargs.keys())}",
@@ -225,15 +246,16 @@ class MemoryStore(StoreBase):
         return appt
 
     def delete_appointment(self, appt_id: str) -> bool:
-        if appt_id in self._appointments:
+        with self._lock:
+            if appt_id not in self._appointments:
+                return False
             title = self._appointments[appt_id].title
             del self._appointments[appt_id]
-            self._log(
-                "system", "schedule.delete", "appointment", appt_id,
-                f"Deleted '{title}'", severity="warning",
-            )
-            return True
-        return False
+        self._log(
+            "system", "schedule.delete", "appointment", appt_id,
+            f"Deleted '{title}'", severity="warning",
+        )
+        return True
 
     def list_appointments(self) -> List[Appointment]:
         return sorted(self._appointments.values(), key=lambda a: a.scheduled_for)

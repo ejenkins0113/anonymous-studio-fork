@@ -55,11 +55,17 @@ def build_geo_place_counts(
     unmapped_mentions = 0
     location_types = {str(v).upper() for v in location_entity_types}
 
+    city_patterns = {
+        city: re.compile(rf"\b{re.escape(city)}\b")
+        for city in city_coords.keys()
+    }
+
     for sess in sessions:
         text_token = normalize_geo_token(getattr(sess, "original_text", "") or "")
         if text_token:
-            for city in city_coords.keys():
-                hits = len(re.findall(rf"\b{re.escape(city)}\b", text_token))
+            for city, pattern in city_patterns.items():
+                hits = len(pattern.findall(text_token))
+
                 if hits > 0:
                     place_counts[city] = place_counts.get(city, 0) + hits
 

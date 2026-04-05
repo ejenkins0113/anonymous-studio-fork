@@ -1,4 +1,5 @@
 # Anonymous Studio — De-Identified Data Pipelines
+
 **CPSC 4205 | Group 3 | Spring 2026**
 *Carley Fant · Sakshi Patel · Diamond Hogans · Elijah Jenkins*
 
@@ -44,9 +45,7 @@ Then open `config.toml` in VS Code — Taipy Studio will show it in the Taipy Co
 
 ---
 
-
-
-```
+```ini
 ┌─────────────────────────────────────────────────────────┐
 │  Taipy GUI  (app.py)                                    │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐    │
@@ -82,18 +81,21 @@ Then open `config.toml` in VS Code — Taipy Studio will show it in the Taipy Co
 ## How Background Jobs Work
 
 1. **User uploads** a CSV/Excel file on the Jobs page
-2. **`invoke_long_callback`** fires — the GUI stays fully responsive
-3. The callback thread calls **`cc.submit_job(df, config)`**
-4. `submit_job` creates a fresh **taipy.core Scenario**, writes the two input DataNodes (`raw_input`, `job_config`), and calls `tc.submit(scenario)`
-5. The Orchestrator picks up the job and runs **`run_pii_anonymization`** (in `tasks.py`):
+2. __`invoke_long_callback`__ fires — the GUI stays fully responsive
+3. The callback thread calls __`cc.submit_job(df, config)`__
+4. `submit_job` creates a fresh __taipy.core Scenario__, writes the two input DataNodes (`raw_input`, `job_config`), and calls `tc.submit(scenario)`
+5. The Orchestrator picks up the job and runs __`run_pii_anonymization`__ (in `tasks.py`):
+
    - Auto-detects text/PII columns
    - Processes in configurable chunks (default 500 rows)
-   - Writes per-chunk progress to **`PROGRESS_REGISTRY`** dict
+   - Writes per-chunk progress to __`PROGRESS_REGISTRY`__ dict
    - Returns `(anonymized_df, stats)` → written to output DataNodes
-6. The GUI polls **`PROGRESS_REGISTRY`** when the user clicks "Refresh Progress"
+
+6. The GUI polls __`PROGRESS_REGISTRY`__ when the user clicks "Refresh Progress"
 7. On completion, results load into the preview table; the linked Kanban card auto-advances to **Review**
 
 ### Switching to True Parallel Workers (Production)
+
 ```bash
 export ANON_MODE=standalone
 export ANON_WORKERS=8
@@ -102,14 +104,17 @@ export ANON_MONGO_URI=mongodb://localhost:27017/anon_studio
 export ANON_MONGO_WRITE_BATCH=5000
 taipy run main.py
 ```
+
 No code changes needed — `core_config.py` reads the env vars.  
 `ANON_RAW_INPUT_BACKEND=auto` also works (it resolves to `mongo` in standalone).
 
 ### Current Mode and Defaults
 
 - `ANON_MODE` supports:
-  - `development` (default)
-  - `standalone`
+
+   - `development` (default)
+   - `standalone`
+
 - If `ANON_MODE` is not set in `.env` or your shell, the app runs in `development`.
 - Source of truth: `MODE = os.environ.get("ANON_MODE", "development")` in `core_config.py`.
 
@@ -185,6 +190,7 @@ python -m spacy download en_core_web_lg
 This enables detection of free-text entity types: `PERSON`, `LOCATION`, and `ORGANIZATION`. Without it the app still works but will only detect structured PII (emails, SSNs, phone numbers, credit cards, etc.).
 
 In **Analyze Text**, use **Settings → NLP model** to switch runtime model mode:
+
 - `auto` (default, best available installed model)
 - `en_core_web_lg`
 - `en_core_web_md`
@@ -237,7 +243,7 @@ taipy run main.py
 
 ### 7. Add to `.gitignore`
 
-```
+```sh
 .venv/
 __pycache__/
 *.pyc
@@ -252,6 +258,7 @@ user_data/
 ### Optional: real MongoDB
 
 Mongo can be used for both:
+
 1. Persistent app store (cards, appointments, audit): set `ANON_STORE_BACKEND=mongo` and `MONGODB_URI`
 2. Raw input DataNode backend for standalone workers: set `ANON_RAW_INPUT_BACKEND=mongo` and `ANON_MONGO_URI` (or `ANON_MONGO_DB` + host fields)
 
@@ -268,14 +275,20 @@ export ANON_MONGO_WRITE_BATCH=5000
 If you are switching to Mongo mode and asking "where do I connect the DataNode?", the connection is configured in `taipy.core` (not in the UI store settings):
 
 - Connection parsing: `core_config.py::_mongo_config_from_env()`
-  - Reads `ANON_MONGO_URI` (or `MONGODB_URI`) and fallback fields like `ANON_MONGO_DB`, `ANON_MONGO_HOST`, `ANON_MONGO_PORT`.
+
+   - Reads `ANON_MONGO_URI` (or `MONGODB_URI`) and fallback fields like `ANON_MONGO_DB`, `ANON_MONGO_HOST`, `ANON_MONGO_PORT`.
+
 - DataNode type selection: `core_config.py::_configure_raw_input_data_node()`
-  - Uses `ANON_RAW_INPUT_BACKEND` (`auto | memory | mongo | pickle`).
-  - In `development`, `auto -> memory`; in `standalone`, `auto -> mongo`.
+
+   - Uses `ANON_RAW_INPUT_BACKEND` (`auto | memory | mongo | pickle`).
+   - In `development`, `auto -> memory`; in `standalone`, `auto -> mongo`.
+
 - Runtime writes: `core_config.py::submit_job()`
-  - For Mongo backend, raw input is converted to Mongo documents and written in batches (`ANON_MONGO_WRITE_BATCH`) via `write()` + `append()`.
+
+   - For Mongo backend, raw input is converted to Mongo documents and written in batches (`ANON_MONGO_WRITE_BATCH`) via `write()` + `append()`.
 
 Important separation:
+
 - `ANON_STORE_BACKEND=mongo` configures the app's operational store (cards/audit/schedule).
 - `ANON_RAW_INPUT_BACKEND=mongo` configures Taipy `raw_input` DataNode persistence for job input payloads.
 
@@ -350,6 +363,29 @@ TAIPY_PORT=5001 taipy run rest_main.py
 
 By default (`ANON_AUTH_ENABLED=0`), no token is required, which keeps local development flow unchanged.
 
+### Local GUI break-glass identity
+
+When the Auth0 proxy is unavailable during local development, you can inject a
+local GUI identity instead of leaving the app permanently unauthenticated:
+
+```bash
+ANON_MODE=development
+ANON_BREAK_GLASS_ENABLED=1
+ANON_BREAK_GLASS_USER=carley
+ANON_BREAK_GLASS_EMAIL=carley@example.com
+ANON_BREAK_GLASS_GROUPS=admin,compliance
+taipy run main.py
+```
+
+Safety rails:
+
+- disabled by default
+- honored only when `ANON_MODE=development`
+- honored only for loopback requests (`127.0.0.1` / `::1`)
+- surfaced in the UI as auth source `break_glass`
+
+Use it only for local/dev recovery when the auth proxy is down.
+
 ---
 
 ## Large Dataset + Mongo Runbook
@@ -365,6 +401,7 @@ By default (`ANON_AUTH_ENABLED=0`), no token is required, which keeps local deve
 ### Data Node Explorer (what you should see)
 
 When `pii_pipeline` is pinned in Taipy Data Node Explorer, these nodes are expected:
+
 - `raw_input`
 - `job_config`
 - `anon_output`
@@ -373,9 +410,10 @@ When `pii_pipeline` is pinned in Taipy Data Node Explorer, these nodes are expec
 `raw_input` will show large uploaded datasets. For large jobs with Mongo backend, writes are batched using `ANON_MONGO_WRITE_BATCH` to reduce memory spikes.
 
 If the explorer shows `Pinned on ???`:
+
 - No scenario is pinned yet, or no scenario has been created in this session.
-- Submit one job from **Batch Jobs** to create a `pii_pipeline` scenario.
-- In Data Node Explorer, pin `pii_pipeline`, then enable **Pinned only** if you want a filtered view.
+- Submit one job from __Batch Jobs__ to create a `pii_pipeline` scenario.
+- In Data Node Explorer, pin `pii_pipeline`, then enable __Pinned only__ if you want a filtered view.
 
 ### Raw Input DataNode — UI controls
 
@@ -385,7 +423,7 @@ In the **Jobs page → Advanced Options → Raw Input DataNode (MongoDB)** secti
 |---------|-------------|
 | Status badge | Shows the resolved backend (`In Memory`, `Mongo`, `Pickle`) and env var context |
 | Restart note | Reminds that `ANON_RAW_INPUT_BACKEND` is read at startup — backend changes require a restart |
-| **MongoDB write batch slider** | Sets the number of documents per MongoDB write (`500`–`50,000`, default `5,000`). Applied to `core_config.MONGO_WRITE_BATCH` in the background thread before the DataNode write. |
+| __MongoDB write batch slider__ | Sets the number of documents per MongoDB write (`500`–`50,000`, default `5,000`). Applied to `core_config.MONGO_WRITE_BATCH` in the background thread before the DataNode write. |
 
 The write batch value is per-job — you can lower it for very large uploads to reduce memory pressure without restarting.
 
@@ -402,6 +440,7 @@ export ANON_MONGO_WRITE_BATCH=5000   # env var default; overridable per-job in U
 ```
 
 Then in the **Jobs page → Advanced Options**:
+
 - **Chunk size (rows)**: higher for throughput (`2000`–`5000`), lower if you see memory pressure (`500`–`1000`).
 - **MongoDB write batch**: lower (`1000`–`2000`) for very large uploads to avoid OOM on the DataNode write.
 - **Compute backend**: `auto` (Dask when row count exceeds threshold) or `dask` to force Dask partitions.
@@ -429,6 +468,7 @@ make stress
 ### Stress validation (current baseline)
 
 Latest run (March 5, 2026):
+
 - Route stress: `210` requests, `0` failures, `P95 6.04ms`, `P99 99.70ms`
 - Task stress: `300,000` DataFrame rows processed successfully
 - Mongo-shaped payload stress: `250,000` rows processed successfully
@@ -512,6 +552,7 @@ anonymous-studio/
 ├── .env.example         Sample environment variables
 ├── .gitignore
 └── .taipyignore         Prevents Taipy's built-in server from exposing source files
+
 ```
 
 ### Why this layout works for Taipy
@@ -527,15 +568,17 @@ anonymous-studio/
 
 
 ## Entity Types Detected
+
 `EMAIL_ADDRESS` · `PHONE_NUMBER` · `CREDIT_CARD` · `US_SSN` · `US_PASSPORT`
 `US_DRIVER_LICENSE` · `US_ITIN` · `US_BANK_NUMBER` · `IP_ADDRESS` · `URL`
 `IBAN_CODE` · `DATE_TIME` · `LOCATION` · `PERSON` · `NRP` · `MEDICAL_LICENSE`
 
 ## Anonymization Operators
+
 | Operator | Example output |
 |----------|---------------|
 | `replace` | `<EMAIL_ADDRESS>` |
-| `redact`  | *(text deleted)* |
+| `redact`  | _(text deleted)_ |
 | `mask`    | `********************` |
 | `hash`    | `a665a45920...` (SHA-256) |
 
@@ -554,9 +597,9 @@ Two backends for operational data (pipeline cards, audit log, appointments, PII 
 
 ### Switching at runtime
 
-Click the **⚙** gear in the top banner → Store Settings. Select **mongo**, enter a URI, click **Apply** — no restart needed.
+Click the **gear** in the top banner → Store Settings. Select **mongo**, enter a URI, click **Apply** — no restart needed.
 
-```
+```sh
 mongodb://localhost:27017/anon_studio       # local
 mongodb+srv://user:pass@cluster/anon_studio # Atlas
 ```
@@ -572,8 +615,9 @@ The Store Settings dialog also includes a **Job Data Nodes** explorer so you can
 ### pymongo
 
 `pymongo[srv]>=4.7` is in `requirements.txt`. If missing, Store Settings shows:
-```
-⚠ pymongo is not installed. Run: pip install 'pymongo[srv]>=4.7'
+
+```sh
+pymongo is not installed. Run: pip install 'pymongo[srv]>=4.7'
 ```
 
 ---
@@ -582,8 +626,8 @@ The Store Settings dialog also includes a **Job Data Nodes** explorer so you can
 
 After uploading a CSV or Excel file the Jobs page shows the **SHA-256 of the original file bytes** beneath the filename:
 
-```
-filename.csv  ✓
+```sh
+filename.csv
 SHA-256  a3f8c2d1e4b7f9...
 ```
 
@@ -601,22 +645,28 @@ CertUtil -hashfile filename.csv SHA256   # Windows
 
 See **[docs/security.md](docs/security.md)** for the full threat model, applied controls, and production hardening checklist.
 
-**TL;DR — controls in place:**
+```bash
+
+```
+
+## Performance
 
 | Control | Status |
 |---------|--------|
-| Path traversal on CSV input | ✅ `ANON_UPLOAD_DIR` whitelist |
-| File upload size cap | ✅ 500 MB (`ANON_MAX_UPLOAD_MB`) |
-| MIME-type validation | ✅ Magic-byte check on xlsx/xls |
-| MongoDB query injection | ✅ Status / severity whitelists |
-| Exception details in browser | ✅ Sanitized; full trace server-side only |
-| Temp file permissions | ✅ `mode=0o700` |
-| Audit log tamper-resistance | ✅ MongoDB capped collection (append-only) |
-| Authentication | ❌ None — course demo, see security.md |
+| Path traversal on CSV input | `ANON_UPLOAD_DIR` whitelist |
+| File upload size cap | 500 MB (`ANON_MAX_UPLOAD_MB`) |
+| MIME-type validation | Magic-byte check on xlsx/xls |
+| MongoDB query injection | Status / severity whitelists |
+| Exception details in browser | Sanitized; full trace server-side only |
+| Temp file permissions | `mode=0o700` |
+| Audit log tamper-resistance | MongoDB capped collection (append-only) |
+| Authentication | None — course demo, see security.md |
 
 ---
 
-## Performance
+```bash
+
+```
 
 See **[docs/performance.md](docs/performance.md)** for:
 

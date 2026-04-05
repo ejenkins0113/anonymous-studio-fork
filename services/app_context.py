@@ -17,6 +17,13 @@ class AppContext:
     burndown_cache: Dict[str, Any] = field(
         default_factory=lambda: {"ts": 0.0, "sig": "", "payload": None}
     )
+    stats_cache: Dict[str, Any] = field(
+        default_factory=lambda: {"ts": 0.0, "data": None}
+    )
+    sessions_cache: Dict[str, Any] = field(
+        default_factory=lambda: {"ts": 0.0, "data": None}
+    )
+
     live_state_ids: Set[str] = field(default_factory=set)
     live_state_lock: Lock = field(default_factory=Lock)
     live_stop_event: Event = field(default_factory=Event)

@@ -422,7 +422,7 @@ def run_pii_anonymization(
 
     _progress(
         job_id, 100, total_rows, total_rows,
-        f"✅ {stats['total_entities']} entities anonymized "
+        f"{stats['total_entities']} entities anonymized "
         f"across {len(text_cols)} column(s) in {stats['duration_s']}s",
         "done",
     )

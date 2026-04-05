@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import jwt
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from flask import Flask, jsonify
 
 from services.auth0_rest import Auth0JWTValidator, AuthError, install_auth0_bearer_auth
@@ -18,9 +20,23 @@ class _StubJwksClient:
         return SimpleNamespace(key=self._key)
 
 
+def _build_rsa_keypair() -> tuple[str, str]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    public_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+    return private_pem, public_pem
+
+
 def _build_token(
     *,
-    secret: str,
+    private_key: str,
     audience: str,
     issuer: str,
     scope: str = "",
@@ -35,7 +51,7 @@ def _build_token(
     }
     if scope:
         payload["scope"] = scope
-    return jwt.encode(payload, secret, algorithm="HS256")
+    return jwt.encode(payload, private_key, algorithm="RS256")
 
 
 def _build_app(*, required_scopes=(), exempt_paths=()):
@@ -49,18 +65,19 @@ def _build_app(*, required_scopes=(), exempt_paths=()):
     def _healthz():
         return jsonify({"ok": True}), 200
 
-    secret = "test-secret-key-with-32-plus-bytes"
+    private_key, public_key = _build_rsa_keypair()
     install_auth0_bearer_auth(
         app,
         domain="example.us.auth0.com",
         audience="https://anonymous-studio-api",
-        algorithms=("HS256",),
+        algorithms=("RS256",),
         required_scopes=required_scopes,
         exempt_paths=exempt_paths,
         exempt_prefixes=(),
-    )._jwks_client = _StubJwksClient(secret)
+        jwks_client=_StubJwksClient(public_key),
+    )
 
-    return app, secret
+    return app, private_key
 
 
 def test_header_parse_rejects_missing_authorization():
@@ -69,7 +86,7 @@ def test_header_parse_rejects_missing_authorization():
 
 
 def test_private_route_rejects_missing_bearer_token():
-    app, _secret = _build_app(exempt_paths=("/healthz",))
+    app, _private_key = _build_app(exempt_paths=("/healthz",))
     client = app.test_client()
 
     response = client.get("/private")
@@ -80,10 +97,10 @@ def test_private_route_rejects_missing_bearer_token():
 
 
 def test_private_route_accepts_valid_token():
-    app, secret = _build_app(exempt_paths=("/healthz",))
+    app, private_key = _build_app(exempt_paths=("/healthz",))
     client = app.test_client()
     token = _build_token(
-        secret=secret,
+        private_key=private_key,
         audience="https://anonymous-studio-api",
         issuer="https://example.us.auth0.com/",
         scope="read:jobs",
@@ -96,10 +113,10 @@ def test_private_route_accepts_valid_token():
 
 
 def test_required_scope_is_enforced():
-    app, secret = _build_app(required_scopes=("read:jobs",), exempt_paths=("/healthz",))
+    app, private_key = _build_app(required_scopes=("read:jobs",), exempt_paths=("/healthz",))
     client = app.test_client()
     token = _build_token(
-        secret=secret,
+        private_key=private_key,
         audience="https://anonymous-studio-api",
         issuer="https://example.us.auth0.com/",
         scope="write:jobs",
@@ -113,9 +130,21 @@ def test_required_scope_is_enforced():
 
 
 def test_exempt_path_skips_auth_check():
-    app, _secret = _build_app(exempt_paths=("/healthz",))
+    app, _private_key = _build_app(exempt_paths=("/healthz",))
     client = app.test_client()
 
     response = client.get("/healthz")
 
     assert response.status_code == 200
+
+
+def test_install_rejects_symmetric_algorithms():
+    app = Flask(__name__)
+
+    with pytest.raises(ValueError, match="HS256"):
+        install_auth0_bearer_auth(
+            app,
+            domain="example.us.auth0.com",
+            audience="https://anonymous-studio-api",
+            algorithms=("HS256",),
+        )

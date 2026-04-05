@@ -1,42 +1,63 @@
 # Anonymous Studio — Taipy Core Configuration
-# This file mirrors the programmatic config in core_config.py so the
-# Taipy VS Code extension can parse the pipeline structure.
+# Generated from core_config.py via Config.export() for tail 4.x Studio compatibility.
 #
 # The authoritative config is core_config.py — that's what actually runs.
-# If you change DataNodes, Tasks, or Scenarios there, update this file too.
+# If you change DataNodes, Tasks, or Scenarios there, regenerate this file with:
+#   ANON_RAW_INPUT_BACKEND=memory python -c "
+#     import core_config
+#     from taipy import Config; Config.export('config.toml')
+#   "
 
 [TAIPY]
 
+[CORE]
+# Production: override these paths via ANON_CONFIG_PATH pointing to a separate
+# config.toml — the override mechanism is in core_config.py (_apply_override_config).
+root_folder = "/tmp/anon_studio"
+storage_folder = ".taipy_core/"
+taipy_storage_folder = "/tmp/anon_studio/.taipy"
+read_entity_retry = "2:int"
+mode = "development"
+core_version = "4.1.1"
+
 [JOB]
 mode = "development"
-# Set to "standalone" and max_nb_of_workers = 4 for production
-# (or use env var ANON_MODE=standalone)
+# Set ANON_MODE=standalone and ANON_WORKERS=4 for production
 
 [DATA_NODE.raw_input]
-# In-memory DataNode: raw PII never written to disk (development mode only).
-# core_config.py uses Config.configure_in_memory_data_node() at runtime.
-# TOML format has no "in_memory" storage_type keyword; "pickle" is shown here
-# only so the Taipy VS Code extension can parse the pipeline graph.
-storage_type = "pickle"
-scope = "SCENARIO"
+# In-memory in development; mongo in standalone. See ANON_RAW_INPUT_BACKEND.
+storage_type = "in_memory"
+scope = "SCENARIO:SCOPE"
 
 [DATA_NODE.job_config]
 storage_type = "pickle"
-scope = "SCENARIO"
+scope = "SCENARIO:SCOPE"
+validity_period = "1d0h0m0s:timedelta"
 
 [DATA_NODE.anon_output]
 storage_type = "pickle"
-scope = "SCENARIO"
+scope = "GLOBAL:SCOPE"
+validity_period = "14d0h0m0s:timedelta"
 
 [DATA_NODE.job_stats]
 storage_type = "pickle"
-scope = "SCENARIO"
+scope = "SCENARIO:SCOPE"
+validity_period = "14d0h0m0s:timedelta"
 
 [TASK.anonymize_task]
-function = "tasks.run_pii_anonymization"
-inputs = ["raw_input", "job_config"]
-outputs = ["anon_output", "job_stats"]
-skippable = false
+function = "tasks:run_pii_anonymization"
+inputs = [ "raw_input:SECTION", "job_config:SECTION",]
+outputs = [ "anon_output:SECTION", "job_stats:SECTION",]
+skippable = "False:bool"
 
 [SCENARIO.pii_pipeline]
-tasks = ["anonymize_task"]
+tasks = [ "anonymize_task:SECTION",]
+additional_data_nodes = []
+frequency = "WEEKLY:FREQUENCY"
+
+[SCENARIO.pii_pipeline.comparators]
+job_stats = [ "core_config._compare_job_stats:function",]
+
+[SCENARIO.pii_pipeline.sequences]
+
+

@@ -1,6 +1,6 @@
 # Anonymous Studio — Python dependencies
 #
-# ⚠️  PYTHON VERSION: 3.9, 3.10, 3.11, or 3.12 ONLY
+# PYTHON VERSION: 3.9, 3.10, 3.11, or 3.12 ONLY
 #
 # Python 3.13+ is NOT supported with this Taipy range (`taipy>=3.1.0,<4.2`).
 # Create your venv with a supported version explicitly:

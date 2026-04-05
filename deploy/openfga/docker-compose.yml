@@ -1,0 +1,73 @@
+##
+## Anonymous Studio — OpenFGA authorization stack
+##
+## Services
+##   openfga   — OpenFGA API (HTTP :8080, gRPC :8081) + Playground/Studio (:3000)
+##   postgres  — durable storage backend for OpenFGA
+##
+## Usage
+##   cd deploy/openfga
+##   docker compose up -d
+##   open http://localhost:3000        ← OpenFGA Studio / Playground
+##   curl http://localhost:8080/healthz
+##
+## After first start, run the seed script to create the store, upload the model,
+## and write demo tuples:
+##   bash seed.sh
+##
+## Environment overrides — copy .env.openfga.example → .env.openfga and edit.
+##
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     openfga
+      POSTGRES_PASSWORD: ${OPENFGA_PG_PASSWORD:-openfga_dev}
+      POSTGRES_DB:       openfga
+    volumes:
+      - openfga_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openfga"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  openfga-migrate:
+    image: openfga/openfga:v1.5.3
+    command: migrate
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: >-
+        postgres://openfga:${OPENFGA_PG_PASSWORD:-openfga_dev}@postgres:5432/openfga?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: on-failure
+
+  openfga:
+    image: openfga/openfga:v1.5.3
+    command: run
+    restart: unless-stopped
+    depends_on:
+      openfga-migrate:
+        condition: service_completed_successfully
+    environment:
+      OPENFGA_DATASTORE_ENGINE:       postgres
+      OPENFGA_DATASTORE_URI: >-
+        postgres://openfga:${OPENFGA_PG_PASSWORD:-openfga_dev}@postgres:5432/openfga?sslmode=disable
+      OPENFGA_AUTHN_METHOD:           none
+      OPENFGA_PLAYGROUND_ENABLED:     "true"
+    ports:
+      - "8080:8080"   # HTTP API  (used by services/authz.py)
+      - "8081:8081"   # gRPC API
+      - "3000:3000"   # Playground / Studio  ← open in browser
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  openfga_pg_data:
