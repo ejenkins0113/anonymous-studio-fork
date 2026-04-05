@@ -19,7 +19,6 @@ import os, re, time, warnings, tempfile, mimetypes
 
 from threading import Thread
 from services.notifications import send_email_notification
-from services.audit_log import create_log
 
 from pymongo import MongoClient
 
