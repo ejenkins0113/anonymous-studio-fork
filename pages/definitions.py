@@ -814,9 +814,10 @@ Done <|{kanban_done_len}|text|class_name=kh-cnt|>
 |>
 
 <|Export Pipeline Data|text|class_name=sh|>
-<|layout|columns=1 1 6|gap=12px|
-<|Export All CSV|button|on_action=on_pipeline_export_csv|class_name=secondary|>
-<|Export All JSON|button|on_action=on_pipeline_export_json|class_name=secondary|>
+<|layout|columns=2 1 1 4|gap=12px|
+<|{pipeline_export_status_filter}|selector|lov={pipeline_export_status_filter_lov}|dropdown=True|label=Filter by status|class_name=fullwidth|>
+<|Export CSV|button|on_action=on_pipeline_export_csv|class_name=secondary|>
+<|Export JSON|button|on_action=on_pipeline_export_json|class_name=secondary|>
 <|part|>|>
 |>
 
@@ -1014,7 +1015,10 @@ QT = """
 <|Save Session|button|on_action=on_qt_save_session|class_name=secondary|>
 |>
 <|{qt_sessions_data}|table|columns=ID;Title;Operator;Entities;Created|show_all=False|page_size=6|filter=True|sortable=True|on_action=on_qt_session_select|>
-<|Load Session|button|on_action=on_qt_load_session|class_name=secondary|render={qt_selected_session!=""}|>
+<|layout|columns=1 1|gap=8px|render={qt_selected_session!=""}|
+<|Load Session|button|on_action=on_qt_load_session|class_name=secondary|>
+<|Download Session|button|on_action=on_qt_download_session|class_name=secondary|>
+|>
 |>
 
 <|{qt_settings_open}|dialog|title=Detection Settings|on_action=on_qt_settings_close|width=720px|

@@ -10,13 +10,14 @@ import app
 from store import get_store, PipelineCard, AuditEntry
 
 
-def _make_state():
+def _make_state(pipeline_export_status_filter="All"):
     return SimpleNamespace(
         audit_search="",
         audit_sev="all",
         audit_table=pd.DataFrame(),
         is_authenticated=True,
         current_user_role="Admin",
+        pipeline_export_status_filter=pipeline_export_status_filter,
     )
 
 
@@ -138,7 +139,93 @@ def test_on_pipeline_export_csv_empty_warns(monkeypatch):
     assert any(level == "warning" for level, _ in notifications)
 
 
-def test_export_logs_to_audit_trail(monkeypatch):
+def test_on_pipeline_export_csv_filtered_by_status(monkeypatch):
+    """Filtered CSV export only includes cards with matching status."""
+    from store.memory import MemoryStore
+    test_store = MemoryStore(seed=False)
+    test_store.add_card(PipelineCard(title="Backlog Card", status="backlog"))
+    test_store.add_card(PipelineCard(title="Done Card", status="done"))
+
+    state = _make_state(pipeline_export_status_filter="backlog")
+    captured = {}
+    monkeypatch.setattr(app, "download",
+                        lambda _s, content, name: captured.update(content=content, name=name))
+    monkeypatch.setattr(app, "notify", lambda *a, **kw: None)
+    monkeypatch.setattr(app, "_refresh_audit", lambda _s: None)
+    monkeypatch.setattr(app, "store", test_store)
+
+    app.on_pipeline_export_csv(state)
+
+    assert captured["name"] == "pipeline_backlog.csv"
+    csv_text = captured["content"].decode("utf-8")
+    assert "Backlog Card" in csv_text
+    assert "Done Card" not in csv_text
+
+
+def test_on_pipeline_export_json_filtered_by_status(monkeypatch):
+    """Filtered JSON export only includes cards with matching status."""
+    from store.memory import MemoryStore
+    test_store = MemoryStore(seed=False)
+    test_store.add_card(PipelineCard(title="Review Card", status="review"))
+    test_store.add_card(PipelineCard(title="In Progress Card", status="in_progress"))
+
+    state = _make_state(pipeline_export_status_filter="review")
+    captured = {}
+    monkeypatch.setattr(app, "download",
+                        lambda _s, content, name: captured.update(content=content, name=name))
+    monkeypatch.setattr(app, "notify", lambda *a, **kw: None)
+    monkeypatch.setattr(app, "_refresh_audit", lambda _s: None)
+    monkeypatch.setattr(app, "store", test_store)
+
+    app.on_pipeline_export_json(state)
+
+    assert captured["name"] == "pipeline_review.json"
+    data = json.loads(captured["content"].decode("utf-8"))
+    assert all(c["status"] == "review" for c in data)
+    assert any(c["title"] == "Review Card" for c in data)
+
+
+def test_on_pipeline_export_filtered_empty_warns(monkeypatch):
+    """Filtered export warns when no cards match the selected status."""
+    from store.memory import MemoryStore
+    test_store = MemoryStore(seed=False)
+    test_store.add_card(PipelineCard(title="Done Card", status="done"))
+
+    state = _make_state(pipeline_export_status_filter="backlog")
+    notifications = []
+    monkeypatch.setattr(app, "download", lambda *a, **kw: None)
+    monkeypatch.setattr(app, "notify",
+                        lambda _s, level, msg: notifications.append((level, msg)))
+    monkeypatch.setattr(app, "_refresh_audit", lambda _s: None)
+    monkeypatch.setattr(app, "store", test_store)
+
+    app.on_pipeline_export_csv(state)
+
+    assert any(level == "warning" for level, _ in notifications)
+
+
+def test_on_pipeline_export_all_unfiltered(monkeypatch):
+    """'All' filter exports every card regardless of status."""
+    from store.memory import MemoryStore
+    test_store = MemoryStore(seed=False)
+    test_store.add_card(PipelineCard(title="Card A", status="backlog"))
+    test_store.add_card(PipelineCard(title="Card B", status="done"))
+
+    state = _make_state(pipeline_export_status_filter="All")
+    captured = {}
+    monkeypatch.setattr(app, "download",
+                        lambda _s, content, name: captured.update(content=content, name=name))
+    monkeypatch.setattr(app, "notify", lambda *a, **kw: None)
+    monkeypatch.setattr(app, "_refresh_audit", lambda _s: None)
+    monkeypatch.setattr(app, "store", test_store)
+
+    app.on_pipeline_export_csv(state)
+
+    assert captured["name"] == "pipeline_cards.csv"
+    csv_text = captured["content"].decode("utf-8")
+    assert "Card A" in csv_text
+    assert "Card B" in csv_text
+
     """Export actions should themselves be logged in the audit trail."""
     from store.memory import MemoryStore
     test_store = MemoryStore(seed=False)
