@@ -433,6 +433,10 @@ def _geo_city_view(lat_values: List[float], lon_values: List[float]) -> Dict[str
         "zoom": round(zoom, 2),
     }
 
+# Demo mode: auto-login with role switcher when ANON_MODE=development (default).
+# No email/password required — lets the whole team explore permission differences.
+_DEMO_MODE: bool = (os.environ.get("ANON_MODE", "development") or "development").strip().lower() == "development"
+
 # Standalone security note only when raw_input explicitly uses pickle backend.
 if os.environ.get("ANON_MODE", "development") == "standalone":
     _raw_backend = (os.environ.get("ANON_RAW_INPUT_BACKEND", "auto") or "auto").strip().lower()
@@ -505,6 +509,13 @@ current_user_id = ""
 current_user_email = ""
 current_user_name = ""
 current_user_role = ""
+email_notifications: bool = True
+in_app_notifications: bool = True
+
+# Demo mode state — populated in on_init when _DEMO_MODE is True
+is_demo_mode: bool = _DEMO_MODE
+demo_role: str = "Admin"
+demo_role_lov: list = list(VALID_ROLES)
 
 # ── Quick-text PII (inline mode, no file upload needed) ──────────────────────
 spacy_status = get_spacy_model_status()
@@ -2855,7 +2866,7 @@ def _refresh_dashboard(state):
             }
         )
         state.dash_perf_figure = perf_fig
-        state.perf_telemetry_table = pd.DataFrame({"Session": raw_labels, "ms": values})
+        state.perf_telemetry_table = pd.DataFrame({"Session": raw_titles, "ms": values})
         state.dash_perf_visible = True
     else:
         state.dash_perf_avg_ms   = 0.0
@@ -3900,6 +3911,12 @@ def on_init(state):
     state.auth_role_lov = list(VALID_ROLES)
     state.auth_status_md = ""
     _clear_auth_form(state)
+    # ── Demo mode: auto-login as Admin, no email/password required ───────────
+    if _DEMO_MODE:
+        state.is_demo_mode = True
+        state.demo_role = "Admin"
+        state.demo_role_lov = list(VALID_ROLES)
+        _apply_demo_role(state, "Admin")
     state.store_status = describe_store_backend()
     state.store_status_label, state.store_status_hover = _store_status_ui(state.store_status)
     state.raw_input_status_label, state.raw_input_status_hover = _raw_input_backend_ui()
@@ -4024,9 +4041,38 @@ def on_auth_logout(state):
         store.log_user_action(actor, "auth.logout", "user", user_id, "Signed out")
     _clear_authenticated_user(state)
     _clear_auth_form(state)
+    if _DEMO_MODE:
+        # In demo mode, re-login immediately with current demo_role instead of showing auth page
+        _apply_demo_role(state, getattr(state, "demo_role", "Admin"), navigate_to_dashboard=True)
+        notify(state, "info", "Role reset to demo mode.")
+        return
     state.auth_status_md = "You have been signed out."
     notify(state, "info", "Signed out.")
     navigate(state, "auth")
+
+
+def on_demo_role_change(state, var, val):
+    """Switch the active role in demo mode — no re-login required."""
+    role = str(val or "Admin")
+    if role not in VALID_ROLES:
+        role = "Admin"
+    state.demo_role = role
+    _apply_demo_role(state, role, navigate_to_dashboard=True)
+    notify(state, "info", f"Now viewing as: {role}")
+
+
+def _apply_demo_role(state, role: str, navigate_to_dashboard: bool = False) -> None:
+    """Auto-login as a named demo user with the given role."""
+    from store.models import UserAccount
+    demo_user = UserAccount(
+        id=f"demo-{role.lower().replace(' ', '-')}",
+        email=f"demo-{role.lower().replace(' ', '-')}@demo.local",
+        full_name=f"Demo {role}",
+        role=role,
+    )
+    _set_authenticated_user(state, demo_user)
+    if navigate_to_dashboard and _is_authenticated(state):
+        navigate(state, "dashboard")
 
 
 def on_auth_go_dashboard(state):

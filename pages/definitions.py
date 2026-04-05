@@ -227,7 +227,13 @@ AUTH = """
 <|{auth_status_md}|text|mode=md|class_name=audit-stmt|>
 |>
 
-<|part|render={not is_authenticated}|class_name=settings-panel|
+<|part|render={is_demo_mode}|class_name=settings-panel|
+<|🎭 Demo Mode — no login required. Switch roles to see how permissions change.|text|mode=md|class_name=inline-hint|>
+<|{demo_role}|selector|lov={demo_role_lov}|dropdown=True|label=View app as|on_change=on_demo_role_change|class_name=fullwidth|>
+<|Enter as {demo_role}|button|on_action=on_demo_role_change|>
+|>
+
+<|part|render={not is_demo_mode and not is_authenticated}|class_name=settings-panel|
 <|{auth_mode}|selector|lov={auth_mode_lov}|dropdown=True|label=Mode|on_change=on_auth_mode_change|class_name=fullwidth|>
 <|{auth_full_name}|input|label=Full Name|class_name=fullwidth|render={auth_mode=="Register"}|>
 <|{auth_email}|input|label=Email|class_name=fullwidth|>
@@ -242,7 +248,7 @@ AUTH = """
 <|Clear|button|on_action=on_auth_clear|class_name=secondary|>
 |>
 |>
-<|part|render={is_authenticated}|class_name=settings-panel|
+<|part|render={not is_demo_mode and is_authenticated}|class_name=settings-panel|
 <|{auth_profile_md}|text|mode=md|class_name=audit-stmt|>
 <|{auth_access_md}|text|mode=md|class_name=inline-hint|>
 <|layout|columns=1 1|gap=8px|
