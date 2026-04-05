@@ -168,6 +168,8 @@ class UserAccount:
     role: str                    = "Researcher"
     full_name: str               = ""
     is_active: bool              = True
+    email_notifications: bool    = True
+    in_app_notifications: bool   = True
     created_at: str              = field(default_factory=_now)
     updated_at: str              = field(default_factory=_now)
     last_login_at: Optional[str] = None

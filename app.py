@@ -14,8 +14,10 @@ import dataclasses
 import json
 import numbers
 import logging
+import scheduler
 import os, re, time, warnings, tempfile, mimetypes
 from threading import Thread
+from services.notifications import send_email_notification
 
 _log = logging.getLogger(__name__)
 from collections import Counter
@@ -292,6 +294,8 @@ def _set_authenticated_user(state, user) -> None:
     state.current_user_email = user.email
     state.current_user_name = user.full_name or user.email
     state.current_user_role = user.role
+    state.email_notifications = getattr(user, "email_notifications", True)
+    state.in_app_notifications = getattr(user, "in_app_notifications", True)
     _sync_auth_ui(state)
 
 
@@ -386,12 +390,14 @@ BASE_MENU_LOV = [
     ("schedule",  Icon("images/schedule.svg",   "Reviews")),
     ("audit",     Icon("images/audit.svg",      "Audit Log")),
     ("ui_demo",   Icon("images/dashboard.svg",  "UI")),
+    ("settings",  Icon("images/settings.svg",   "Settings")),
 ]
 menu_lov = [("auth", Icon("images/audit.svg", "Access"))]
 
 PAGE_ROLE_RULES: Dict[str, set[str]] = {
     "auth": set(VALID_ROLES),
     "dashboard": set(VALID_ROLES),
+    "settings": set(VALID_ROLES),
     "analyze": set(VALID_ROLES),
     "jobs": {"Admin", "Compliance Officer", "Developer"},
     "pipeline": {"Admin", "Compliance Officer", "Developer"},
@@ -3568,6 +3574,8 @@ def _set_qt_entity_state(state, entities: List[Dict[str, Any]]) -> Counter:
 def on_init(state):
     _register_live_state(state)
     _clear_authenticated_user(state)
+    state.email_notifications = True
+    state.in_app_notifications = True
     state.auth_mode = "Sign In"
     state.auth_mode_lov = ["Sign In", "Register"]
     state.auth_role_lov = list(VALID_ROLES)
@@ -3604,6 +3612,8 @@ def on_init(state):
         _set_qt_entity_state(state, ents)
     except Exception:
         pass
+    scheduler.sync(store.list_appointment())
+    scheduler.start()
     navigate(state, "auth")
 
 
@@ -3657,7 +3667,36 @@ def on_auth_login(state):
     notify(state, "success", message)
     navigate(state, "dashboard")
 
+def on_toggles_email_notifications(state, value):
+    state.email_notifications = value
+    save_notification_settings(state)
 
+def on_toggles_in_app_notifications(state, value):
+    state.in_app_notifications = value
+    save_notification_settings(state)  
+
+def save_notification_settings(state):
+    if not state.is_authenticated:
+        return
+    store.update_user_settings(
+        user_id=state.current_user_id,
+        email_notifications=state.email_notifications,
+        in_app_notifications=state.in_app_notifications,
+    )      
+
+    notify(state, "success", "Notification settings updated.")
+
+def send_user_notification(state, message, subject = "Notification"):    
+    if state.in_app_notifications:
+        notify(state, "info", message)
+
+    if state.email_notifications:
+        send_email_notification(
+            recipient = state.current_user_email,
+            subject = subject,
+            message = message
+            )    
+        
 def on_auth_logout(state):
     actor = getattr(state, "current_user_email", "") or "anonymous"
     user_id = getattr(state, "current_user_id", "")
@@ -3680,7 +3719,7 @@ def on_auth_go_dashboard(state):
 
 
 def on_menu_action(state, id, payload):
-    valid_pages = {"auth", "dashboard", "analyze", "jobs", "pipeline", "schedule", "audit", "ui_demo"}
+    valid_pages = {"auth", "dashboard", "analyze", "jobs", "pipeline", "schedule", "audit", "ui_demo", "settings"}
 
     def _normalize_page(value: Any) -> Optional[str]:
         if not isinstance(value, str):
@@ -3737,6 +3776,9 @@ def on_menu_action(state, id, payload):
         _refresh_ui_demo(state)
         _refresh_plotly_playground(state)
 
+    for n in scheduler.flush_notifications():
+        notify(state, n["level"], n["msg"])
+
 
 def on_taipy_event(state, event):
     """Broadcast callback for taipy.core events to keep UI monitors current."""
@@ -3754,6 +3796,9 @@ def on_taipy_event(state, event):
             notify(state, "error", "A Taipy job failed. Open Errors / Audit for details.")
     except Exception:
         pass
+
+    for n in scheduler.flush_notifications():
+        notify(state, n["level"], n["msg"])
 
 
 # ── Global on_change for table selection (single-click) ──────────────────────
@@ -5631,6 +5676,9 @@ def on_appt_save(state):
                           attendees=atts,
                           pipeline_card_id=state.appt_card_f or None,
                           status=state.appt_status_f)
+        scheduler.cancel(state.appt_id_edit)
+        appt = store.get_appointment(state.appt_id_edit)
+        scheduler.register(appt)
         notify(state, "success", "Appointment updated.")
     else:
         a = Appointment(title=state.appt_title_f, description=state.appt_desc_f,
@@ -5638,6 +5686,7 @@ def on_appt_save(state):
                         attendees=atts,
                         pipeline_card_id=state.appt_card_f or None)
         store.add_appointment(a)
+        scheduler.register(a)
         notify(state, "success", f"'{a.title}' scheduled.")
     state.appt_form_open = False
     _refresh_appts(state); _refresh_audit(state); _refresh_dashboard(state)
