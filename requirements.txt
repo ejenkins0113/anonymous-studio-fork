@@ -2,7 +2,7 @@
 #
 # PYTHON VERSION: 3.9, 3.10, 3.11, or 3.12 ONLY
 #
-# Python 3.13+ is NOT supported with this Taipy range (`taipy>=3.1.0,<4.2`).
+# Python 3.13+ is NOT supported with this Taipy range (`taipy>=4.0.0,<4.2`).
 # Create your venv with a supported version explicitly:
 #
 #   python3.12 -m venv .venv        (recommended)
@@ -11,7 +11,7 @@
 # If you only have Python 3.13+ installed, get 3.12 from https://python.org first.
 # Check your version: python --version  (must show 3.12.x or similar)
 
-taipy>=3.1.0,<4.2
+taipy>=4.0.0,<4.2
 presidio-analyzer>=2.2.35
 presidio-anonymizer>=2.2.35
 spacy>=3.7.0,<3.9
@@ -20,11 +20,11 @@ openpyxl>=3.1.2,<=3.1.5
 chardet<8
 faker>=24.0.0
 python-dotenv>=1.0.0
-PyJWT>=2.8.0,<3
+PyJWT>=2.12.0,<3
 pymongo[srv]>=4.7
 mongomock>=0.4
 dask[dataframe]>=2024.8.0
-duckdb>=1.0.0
+duckdb>=1.1.0
 openai>=1.40.0
 prometheus_client>=0.20.0
 schedule>=1.2.0
