@@ -82,8 +82,14 @@ def register(appt) -> bool:
         return False  # already past
 
     appt_id = appt.id    
+
+    # Optional: schedule a reminder 24 h before due time, if that time is in the future.
+    # from datetime import timedelta
+    # reminder_dt = due_dt - timedelta(hours=24)
+
+    # For testing/demo purposes, use a 10-second reminder instead of 24 hours.
     from datetime import timedelta
-    reminder_dt = due_dt - timedelta(hours=24)
+    reminder_dt = due_dt - timedelta(seconds=10) 
 
     if reminder_dt > datetime.now():
         reminder_time_str = reminder_dt.strftime("%H:%M")
@@ -114,6 +120,7 @@ def register(appt) -> bool:
         _JOBS[appt_id] = job
 
     log.info("scheduler: registered appt %s for %s", appt_id, appt.scheduled_for)
+    print(f"🔔 [SCHEDULER DEBUG] Registered: {appt.title} on {appt.scheduled_for}")
     return True
 
 
@@ -171,8 +178,10 @@ def _fire(appt_id: str) -> None:
     store = get_store()
 
     a = store.get_appointment(appt_id)
+    print(f"🔥 [SCHEDULER DEBUG] _fire() triggered for appointment: {appt_id}")
     if not a:
         log.warning("scheduler: appt %s not found at fire time", appt_id)
+        print(f"❌ [SCHEDULER DEBUG] Appointment not found!")
         return
 
     log.info("scheduler: firing appt %s '%s'", appt_id, a.title)
@@ -214,7 +223,9 @@ def _send_reminder(appt_id: str) -> None:
     store = get_store()
     a = store.get_appointment(appt_id)
 
+    print(f"🚀 [SCHEDULER DEBUG] Reminder for appointment: {appt_id}")
     if not a:
+        print(f"❌ [SCHEDULER DEBUG] Appointment {appt_id} not found!")
         return
     #Getting Pipeline Card Information
     card_info = ""
@@ -247,4 +258,5 @@ Scheduled for: {a.scheduled_for}
         _PENDING.append({
             "level": "info",
             "msg": f"Reminder: {a.title} in 24 hours"
-        })    
+        })
+        print(f"📬 [SCHEDULER DEBUG] Notification queued in _PENDING list. Total pending: {len(_PENDING)}")    

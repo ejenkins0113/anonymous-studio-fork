@@ -3955,9 +3955,26 @@ def on_init(state):
         _set_qt_entity_state(state, ents)
     except Exception:
         pass
-    scheduler.sync(store.list_appointment())
+    scheduler.sync(store.list_appointments())
     scheduler.start()
     navigate(state, "auth")
+
+
+def on_navigate(state, page_name: str) -> str:
+    """Called when user navigates. Flush scheduler notifications here."""
+    print(f"📍 [APP DEBUG] on_navigate() called: {page_name}")
+    
+    # Flush and display any queued notifications from scheduler
+    pending_notifs = scheduler.flush_notifications()
+    if pending_notifs:
+        print(f"📬 [APP DEBUG] Flushed {len(pending_notifs)} notification(s) from scheduler")
+        for n in pending_notifs:
+            print(f"   ➜ Displaying: {n['msg']}")
+            notify(state, n["level"], n["msg"])
+    else:
+        print(f"📬 [APP DEBUG] No notifications in queue")
+    
+    return page_name  # Required: return the page name to allow navigation
 
 
 # ── Navigation ────────────────────────────────────────────────────────────────
@@ -4010,12 +4027,10 @@ def on_auth_login(state):
     notify(state, "success", message)
     navigate(state, "dashboard")
 
-def on_toggles_email_notifications(state, value):
-    state.email_notifications = value
+def on_toggles_email_notifications(state):
     save_notification_settings(state)
 
-def on_toggles_in_app_notifications(state, value):
-    state.in_app_notifications = value
+def on_toggles_in_app_notifications(state):
     save_notification_settings(state)  
 
 def save_notification_settings(state):
@@ -4151,7 +4166,11 @@ def on_menu_action(state, id, payload):
         _refresh_telemetry(state)
     state.active_page = page
 
-    for n in scheduler.flush_notifications():
+    pending_notifs = scheduler.flush_notifications()
+    if pending_notifs:
+        print(f"📬 [APP DEBUG] Flushed {len(pending_notifs)} notification(s) from scheduler")
+    for n in pending_notifs:
+        print(f"   ➜ Displaying: {n['msg']}")
         notify(state, n["level"], n["msg"])
 
 
@@ -6811,27 +6830,27 @@ def detect_pii(data: TextRequest):
     text = data.text
 
     if "@" in text:
-        create_log(
-            db,
-            actor="user",
-            action="pii_detected",
-            resource_type="text",
-            resource_id="input_text",
-            details="Email detected in input",
-            severity="warning"
-        )
+        # create_log(
+        #     db,
+        #     actor="user",
+        #     action="pii_detected",
+        #     resource_type="text",
+        #     resource_id="input_text",
+        #     details="Email detected in input",
+        #     severity="warning"
+        # )
 
         return {"message": "Possible email detected", "input": text}
 
-    create_log(
-        db,
-        actor="user",
-        action="pii_checked",
-        resource_type="text",
-        resource_id="input_text",
-        details="No PII detected",
-        severity="info"
-    )
+    # create_log(
+    #     db,
+    #     actor="user",
+    #     action="pii_checked",
+    #     resource_type="text",
+    #     resource_id="input_text",
+    #     details="No PII detected",
+    #     severity="info"
+    # )
 
     return {"message": "No PII detected", "input": text}
 
