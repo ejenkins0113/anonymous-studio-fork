@@ -21,3 +21,11 @@ jobs:
 
       - name: Check Python syntax
         run: find . -name '*.py' ! -path './.venv/*' -exec python -m py_compile {} +
+
+      - name: Block FastAPI in app.py
+        run: |
+          if grep -qE "^(from fastapi|import fastapi)" app.py; then
+            echo "❌ FastAPI import detected in app.py — this project uses Taipy only. Remove all FastAPI code before merging."
+            exit 1
+          fi
+          echo "✅ No FastAPI imports in app.py"
