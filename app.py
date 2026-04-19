@@ -3944,6 +3944,23 @@ def on_init(state):
     navigate(state, "auth")
 
 
+def on_navigate(state, page_name: str) -> str:
+    """Called when user navigates. Flush scheduler notifications here."""
+    print(f"📍 [APP DEBUG] on_navigate() called: {page_name}")
+    
+    # Flush and display any queued notifications from scheduler
+    pending_notifs = scheduler.flush_notifications()
+    if pending_notifs:
+        print(f"📬 [APP DEBUG] Flushed {len(pending_notifs)} notification(s) from scheduler")
+        for n in pending_notifs:
+            print(f"   ➜ Displaying: {n['msg']}")
+            notify(state, n["level"], n["msg"])
+    else:
+        print(f"📬 [APP DEBUG] No notifications in queue")
+    
+    return page_name  # Required: return the page name to allow navigation
+
+
 # ── Navigation ────────────────────────────────────────────────────────────────
 def on_auth_mode_change(state, var_name=None, value=None):
     state.auth_mode = str(value or state.auth_mode or "Sign In")
@@ -3994,12 +4011,10 @@ def on_auth_login(state):
     notify(state, "success", message)
     navigate(state, "dashboard")
 
-def on_toggles_email_notifications(state, value):
-    state.email_notifications = value
+def on_toggles_email_notifications(state):
     save_notification_settings(state)
 
-def on_toggles_in_app_notifications(state, value):
-    state.in_app_notifications = value
+def on_toggles_in_app_notifications(state):
     save_notification_settings(state)  
 
 def save_notification_settings(state):
@@ -4135,7 +4150,11 @@ def on_menu_action(state, id, payload):
         _refresh_telemetry(state)
     state.active_page = page
 
-    for n in scheduler.flush_notifications():
+    pending_notifs = scheduler.flush_notifications()
+    if pending_notifs:
+        print(f"📬 [APP DEBUG] Flushed {len(pending_notifs)} notification(s) from scheduler")
+    for n in pending_notifs:
+        print(f"   ➜ Displaying: {n['msg']}")
         notify(state, n["level"], n["msg"])
 
 
@@ -5222,6 +5241,17 @@ def on_submit_job(state):
     """Validate inputs, parse the file, then fire invoke_long_callback."""
     if not _require_action_role(state, "job_submit", "Batch job submission"):
         return
+    
+    # OpenFGA authorization check for job submission
+    if getattr(state, "gui_auth_source", "unauthenticated") not in {"proxy", "break_glass"} or not getattr(state, "gui_user", ""):
+        notify(state, "error",
+               "Job submission requires an authenticated session. "
+               "Sign in via the auth proxy or enable local break-glass access first."); return
+    _principal = principal_for(state)
+    if not authz_check(_principal, "can_submit", "job", "global"):
+        notify(state, "error",
+               "Authorization denied: you do not have permission to submit jobs."); return
+    
     # Resolve bytes from per-session cache (preferred) or Taipy's bound variable (fallback)
     sid = get_state_id(state)
     raw_bytes, _slot = resolve_upload_bytes(state, _FILE_CACHE, sid)
@@ -5556,6 +5586,16 @@ def on_select_job(state, var_name, value):
 
 def on_job_cancel(state):
     """Cancel the latest cancellable taipy job for the selected scenario job."""
+    # OpenFGA authorization check for job cancellation
+    if getattr(state, "gui_auth_source", "unauthenticated") not in {"proxy", "break_glass"} or not getattr(state, "gui_user", ""):
+        notify(state, "error",
+               "Job cancellation requires an authenticated session. "
+               "Sign in via the auth proxy or enable local break-glass access first."); return
+    _principal = principal_for(state)
+    if not authz_check(_principal, "can_cancel", "job", "global"):
+        notify(state, "error",
+               "Authorization denied: you do not have permission to cancel jobs."); return
+    
     jid = state.active_job_id
     if not jid:
         notify(state, "warning", "Select a job in Job History first.")

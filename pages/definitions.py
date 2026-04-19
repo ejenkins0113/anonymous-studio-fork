@@ -848,7 +848,7 @@ SCHEDULE = """
 <|layout|columns=2 1|gap=24px|
 <|part|class_name=panel|
 <|All Appointments|text|class_name=panel-hd|>
-<|{appt_table}|table|columns=Title;Date / Time;Duration;Attendees;Linked Card;Status|style[Status]=status_cell_class|show_all=False|page_size=10|on_action=on_appt_select|filter=True|sortable=True|>
+<|{appt_table}|table|columns=Title;Date / Time;Duration;Attendees;Linked Card;Status|cell_class_name[Status]=status_cell_class|show_all=False|page_size=10|on_action=on_appt_select|filter=True|sortable=True|>
 |>
 <|part|class_name=panel|
 <|Upcoming|text|class_name=panel-hd|>
@@ -1257,6 +1257,27 @@ NAV = """
 <|menu|lov={menu_lov}|on_action=on_menu_action|label=(▀̿Ĺ̯▀̿ ̿)|>
 """
 
+SETTINGS = """
+<|part|class_name=page-hd|
+<|Notification Preferences|text|class_name=page-title|>
+<|Manage how you receive notifications for review reminders and system updates.|text|class_name=page-sub|>
+|>
+
+<|part|class_name=panel|
+<|{email_notifications}|toggle|label=Email notifications|on_change=on_toggles_email_notifications|>
+<|{in_app_notifications}|toggle|label=In-app notifications|on_change=on_toggles_in_app_notifications|>
+|>
+
+<|part|class_name=panel|
+<|{current_user_email if is_authenticated else "demo-admin@demo.local"}|text|mode=md|class_name=inline-hint|>
+<|{f"Current role: **{current_user_role}**" if is_authenticated else "Current role: Admin"}|text|mode=md|class_name=inline-hint|>
+|>
+
+<|part|class_name=panel|
+<|{"Sign in to save your notification preferences and receive reminders by email." if not is_authenticated else "You are signed in and can receive email reminders."}|text|>
+|>
+"""
+
 PAGES = {
     "/":          NAV,
     "auth":       AUTH,
@@ -1268,4 +1289,5 @@ PAGES = {
     "audit":      AUDIT,
     "telemetry":  TELEMETRY,
     "ui_demo":    UI_DEMO,
+    "settings":   SETTINGS,
 }

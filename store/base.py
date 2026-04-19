@@ -76,6 +76,13 @@ class StoreBase(ABC):
     def list_users(self) -> List[UserAccount]:
         """Return all user accounts."""
 
+    def update_user_settings(self, user_id: str, **kwargs) -> Optional[UserAccount]:
+        """Update notification settings for an existing user.
+
+        This is a convenience helper built on top of update_user().
+        """
+        return self.update_user(user_id, **kwargs)
+
     # ── Pipeline Cards ─────────────────────────────────────────────────────────
 
     @abstractmethod
