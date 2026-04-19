@@ -139,14 +139,22 @@ def _build_model_payload() -> dict:
             {
                 "type": "job",
                 "relations": {
-                    "analyst":    union(this()),
-                    "admin":      union(this()),
-                    "can_submit": union(computed("analyst"), computed("admin")),
+                    "analyst":            union(this()),
+                    "reviewer":           union(this()),
+                    "compliance_officer": union(this()),
+                    "admin":              union(this(), computed("compliance_officer")),
+                    "can_submit":         union(computed("analyst"), computed("reviewer"),
+                                               computed("compliance_officer"), computed("admin")),
+                    "can_cancel":         union(computed("reviewer"),
+                                               computed("compliance_officer"), computed("admin")),
                 },
                 "metadata": {"relations": {
-                    "analyst":    {T: USER_AND_GROUP},
-                    "admin":      {T: USER_AND_GROUP},
-                    "can_submit": {T: []},
+                    "analyst":            {T: USER_AND_GROUP},
+                    "reviewer":           {T: USER_AND_GROUP},
+                    "compliance_officer": {T: USER_AND_GROUP},
+                    "admin":              {T: USER_AND_GROUP},
+                    "can_submit":         {T: []},
+                    "can_cancel":         {T: []},
                 }},
             },
             {
@@ -218,7 +226,7 @@ def main() -> None:
     print(f"  export OPENFGA_STORE_ID={store_id}")
     print(f"  export OPENFGA_MODEL_ID={model_id}")
     print()
-    print("  Open the Studio:  http://localhost:3000")
+    print("  Open the Studio:  http://localhost:3000/playground")
 
 
 if __name__ == "__main__":
