@@ -6,6 +6,14 @@
     {"user": "user:charlie@example.com","relation": "compliance_officer",  "object": "audit_log:global"},
     {"user": "user:bob@example.com",    "relation": "analyst",            "object": "card:demo-card-001"},
     {"user": "user:admin@example.com",  "relation": "admin",              "object": "card:demo-card-001"},
-    {"user": "user:admin@example.com",  "relation": "admin",              "object": "audit_log:global"}
+    {"user": "user:admin@example.com",  "relation": "admin",              "object": "audit_log:global"},
+    {"user": "user:alice@example.com",  "relation": "reviewer",           "object": "job:demo-job-001"},
+    {"user": "user:charlie@example.com","relation": "compliance_officer",  "object": "job:demo-job-001"},
+    {"user": "user:bob@example.com",    "relation": "analyst",            "object": "job:demo-job-001"},
+    {"user": "user:admin@example.com",  "relation": "admin",              "object": "job:demo-job-001"},
+    {"user": "user:alice@example.com",  "relation": "reviewer",           "object": "job:global"},
+    {"user": "user:charlie@example.com","relation": "compliance_officer",  "object": "job:global"},
+    {"user": "user:bob@example.com",    "relation": "analyst",            "object": "job:global"},
+    {"user": "user:admin@example.com",  "relation": "admin",              "object": "job:global"}
   ]
 }

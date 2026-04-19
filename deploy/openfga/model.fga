@@ -20,6 +20,8 @@ model
 ## Phase-1 enforced actions (all others are un-gated pending Phase 2)
 ##   card:can_attest       → reviewer | compliance_officer | admin
 ##   audit_log:can_export  → compliance_officer | admin
+##   job:can_submit        → analyst | reviewer | compliance_officer | admin
+##   job:can_cancel        → reviewer | compliance_officer | admin
 ##
 
 type user
@@ -47,6 +49,17 @@ type audit_log
     define compliance_officer: [user, group#member]
     define admin:              [user, group#member] or compliance_officer
     define can_export:         compliance_officer or admin
+
+## ── job ──────────────────────────────────────────────────────────────────────
+## Batch anonymization jobs — use job id as object id, or "global" for general permissions.
+type job
+  relations
+    define analyst:            [user, group#member]
+    define reviewer:           [user, group#member]
+    define compliance_officer: [user, group#member]
+    define admin:              [user, group#member] or compliance_officer
+    define can_submit:         analyst or reviewer or compliance_officer or admin
+    define can_cancel:         reviewer or compliance_officer or admin
 
 ## ── session ───────────────────────────────────────────────────────────────────
 type session
