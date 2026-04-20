@@ -68,13 +68,6 @@ type session
     define admin:   [user, group#member]
     define can_view: analyst or admin
 
-## ── job ───────────────────────────────────────────────────────────────────────
-type job
-  relations
-    define analyst:  [user, group#member]
-    define admin:    [user, group#member]
-    define can_submit: analyst or admin
-
 ## ── attestation ───────────────────────────────────────────────────────────────
 type attestation
   relations

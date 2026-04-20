@@ -26,7 +26,7 @@ curl http://localhost:8080/healthz
 ```
 
 **Open the Studio** in your browser:
-→ **[http://localhost:3000](http://localhost:3000)**
+→ **[http://localhost:3000/playground](http://localhost:3000/playground)**
 
 ---
 
@@ -45,7 +45,7 @@ Output:
 ==> Uploading authorization model …
     Model ID: 01HVMC...
 ==> Writing demo authorization tuples …
-    7 tuples written.
+    15 tuples written.
 ==> Wrote deploy/openfga/.env.openfga
 ```
 
@@ -121,7 +121,7 @@ ANON_STORE_BACKEND=memory .venv/bin/taipy run main.py
 
 ### Scene 1 — Authorization Studio controls the app (analyst blocked)
 
-1. Open **http://localhost:3000** → click the `anonymous-studio` store → **Playground** tab.
+1. Open **http://localhost:3000/playground** → click the `anonymous-studio` store.
 2. Run a check:
    - User: `user:bob@example.com`
    - Relation: `can_attest`
