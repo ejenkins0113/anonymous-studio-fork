@@ -18,7 +18,7 @@ This sprint focused on security hardening, production readiness, and closing cri
 
 **Diamond Hogans:** [Summary]
 
-**Sakshi Patel:** [Summary]
+**Sakshi Patel:** This sprint focused on improving the usability and overall user experience of the application. I designed and developed a new hybrid redaction interface to simplify how users interact with the system. The new interface provides a cleaner layout with side-by-side input and output, making the redaction process more intuitive. I also worked on running the project locally, debugging setup issues, and ensuring both the main application and hybrid interface function correctly for demonstration purposes.
 
 **Elijah Jenkins:** [Summary]
 
@@ -52,7 +52,12 @@ This sprint focused on security hardening, production readiness, and closing cri
 
 **Diamond Hogans:** [Completed tasks]
 
-**Sakshi Patel:** [Completed tasks]
+**Sakshi Patel:** 
+- **Hybrid Redaction UI Development** — Designed and implemented a new user-friendly hybrid redaction interface with improved layout, side-by-side original and processed text display, and better overall user experience
+- **UI/UX Improvements** — Simplified navigation by reducing multiple steps required for redaction and making the workflow more intuitive for users
+- **Local Environment Setup & Debugging** — Successfully ran the project locally, resolved issues related to file paths, virtual environment configuration, and module imports (e.g., pii_engine)
+- **Dual App Execution** — Configured and tested both the main Taipy application and hybrid interface to run simultaneously on different ports for demonstration
+- **Testing & Validation** — Tested redaction functionality to ensure the new interface correctly reflects backend processing and produces accurate results
 
 **Elijah Jenkins:** [Completed tasks]
 
@@ -72,7 +77,7 @@ Sprint 5 shifted from feature development to security hardening and production r
 
 **Carley Fant:** Sprint 5 was intentionally scoped as a security and polish sprint rather than feature development. All planned work was completed: PR #123 security fixes were reviewed and merged, notification system improvements were integrated, and comprehensive demo materials were created to showcase the semester's work. The Git workflow required more attention than anticipated due to managing multiple concurrent PRs and ensuring clean merges into the new sprint branch.
 
-**Sakshi Patel:** [Planning vs. reality]
+**Sakshi Patel:** The sprint was planned to focus on improving usability and preparing the application for demonstration. Most of the planned work was completed, including designing the hybrid interface and testing the system. However, some tasks took longer than expected due to technical challenges such as environment setup issues and debugging errors. Despite these challenges, I was able to complete the most important usability improvements and ensure the application runs correctly.
 
 **Diamond Hogans:** [Planning vs. reality]
 
@@ -84,7 +89,7 @@ Based on GitHub contributor data for this sprint:
 
 - **Carley Fant:** PR #123 review and merge (security fixes), PR #120 integration (notifications), PR #119 integration (dependency updates), 2 new documentation files (demo script + launch script), branch management for `feat-sprint-5`, retrospective documentation
 - **Diamond Hogans:** [Contribution summary]
-- **Sakshi Patel:** [Contribution summary]
+- **Sakshi Patel:** Hybrid redaction UI design and development, usability improvements, local environment setup and debugging, dual application execution, and system testing for final demo readiness
 - **Elijah Jenkins:** [Contribution summary]
 
 ---
@@ -101,7 +106,9 @@ Based on GitHub contributor data for this sprint:
 
 [Additional team items]
 
----
+- The development of the hybrid redaction interface was successful and significantly improved the usability of the application by providing a clean, side-by-side layout for input and output.
+- I was able to successfully run both the main Taipy application and the hybrid interface locally, which helped in testing and demonstrating the system effectively.
+- Debugging issues related to file paths, virtual environment setup, and module imports were resolved, allowing the application to run smoothly for the final demo.
 
 ## What Didn't Go Well
 
@@ -111,7 +118,9 @@ Based on GitHub contributor data for this sprint:
 
 [Additional items]
 
----
+- Setting up and running the project locally was challenging at first due to environment configuration issues and module import errors, which delayed progress.
+- Some tasks, especially UI integration and debugging, took longer than expected because the project structure was complex and required additional time to understand.
+- There was some uncertainty about how to properly integrate the hybrid interface into the existing Taipy system without affecting existing functionality.
 
 ## Action Items for Next Sprint
 
@@ -133,7 +142,8 @@ Sprint 5 was about ensuring the system is actually production-ready, not just fe
 
 **Diamond Hogans:** [2-4 sentences]
 
-**Sakshi Patel:** [2-4 sentences]
+**Sakshi Patel:** 
+During this sprint, my main contribution was designing and implementing a new hybrid redaction interface to improve the usability of the application. I focused on creating a clean and simple layout where users can input text and view redacted results side by side, making the system more intuitive. I also worked on running the project locally and resolving technical issues to ensure both applications function correctly. In the future, I want to improve my debugging efficiency and gain a deeper understanding of how the system components are integrated.
 
 **Elijah Jenkins:** [2-4 sentences]
 
